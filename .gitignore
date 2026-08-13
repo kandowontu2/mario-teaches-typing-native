@@ -1,0 +1,18 @@
+.cache/
+dist/
+**/bin/
+**/obj/
+.vs/
+TestResults/
+artifacts/
+*.user
+*.suo
+*.log
+
+# Original game data and writable state must not be committed. The tested
+# release executable is distributed separately as a GitHub release asset.
+media/
+*.chd
+*.vhd
+assets/original/*
+!assets/original/README.md
