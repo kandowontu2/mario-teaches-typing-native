@@ -32,6 +32,10 @@ internal sealed class ProgressStore
 
     public bool SpeechEnabled { get; private set; } = true;
 
+    public NativeDisplayMode DisplayMode { get; private set; }
+
+    public bool WidescreenEnabled => DisplayMode == NativeDisplayMode.Widescreen;
+
     public IReadOnlyList<SessionResult> Results => results;
 
     public IReadOnlyList<bool> CertificateFlags => certificateFlags;
@@ -59,11 +63,18 @@ internal sealed class ProgressStore
                 return CreateDefault(filePath);
             }
 
-            var data = JsonSerializer.Deserialize<ProgressData>(File.ReadAllText(filePath));
+            var jsonText = File.ReadAllText(filePath);
+            using var jsonDocument = JsonDocument.Parse(jsonText);
+            var hasDisplayMode = jsonDocument.RootElement.ValueKind == JsonValueKind.Object &&
+                jsonDocument.RootElement.TryGetProperty(nameof(ProgressData.DisplayMode), out _);
+            var data = JsonSerializer.Deserialize<ProgressData>(jsonText);
             var store = new ProgressStore(filePath);
             store.MusicEnabled = data?.MusicEnabled ?? true;
             store.SoundEffectsEnabled = data?.SoundEffectsEnabled ?? true;
             store.SpeechEnabled = data?.SpeechEnabled ?? true;
+            store.DisplayMode = NormalizeDisplayMode(
+                hasDisplayMode ? data?.DisplayMode : null,
+                data?.WidescreenEnabled ?? false);
             if (data?.Profiles is { Count: > 0 })
             {
                 foreach (var profile in data.Profiles)
@@ -244,6 +255,12 @@ internal sealed class ProgressStore
         Save();
     }
 
+    public void SetDisplaySettings(NativeDisplayMode mode)
+    {
+        DisplayMode = NormalizeDisplayMode(mode, legacyWidescreen: false);
+        Save();
+    }
+
     public double BestWordsPerMinute => results.Count == 0 ? 0 : results.Max(result => result.WordsPerMinute);
 
     public double AverageAccuracy => results.Count == 0 ? 0 : results.Average(result => result.Accuracy);
@@ -311,7 +328,9 @@ internal sealed class ProgressStore
             profiles.Select(CloneProfile).ToList(),
             MusicEnabled,
             SoundEffectsEnabled,
-            SpeechEnabled);
+            SpeechEnabled,
+            DisplayMode != NativeDisplayMode.Classic,
+            DisplayMode);
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
         var temporary = filePath + ".tmp";
         File.WriteAllText(temporary, json);
@@ -342,6 +361,16 @@ internal sealed class ProgressStore
         value is OriginalCharacter.Mario or OriginalCharacter.Luigi or OriginalCharacter.Princess
             ? value
             : OriginalCharacter.Mario;
+
+    private static NativeDisplayMode NormalizeDisplayMode(
+        NativeDisplayMode? value,
+        bool legacyWidescreen) => value switch
+    {
+        NativeDisplayMode.Widescreen => NativeDisplayMode.Widescreen,
+        NativeDisplayMode.UltraWidescreen => NativeDisplayMode.UltraWidescreen,
+        NativeDisplayMode.Classic => NativeDisplayMode.Classic,
+        _ => legacyWidescreen ? NativeDisplayMode.Widescreen : NativeDisplayMode.Classic,
+    };
 
     private static OriginalScreen NormalizeWorld(OriginalScreen world, int goalWordsPerMinute) => world switch
     {
@@ -450,10 +479,13 @@ internal sealed class ProgressStore
         List<StudentProfileData>? Profiles,
         bool? MusicEnabled,
         bool? SoundEffectsEnabled,
-        bool? SpeechEnabled)
+        bool? SpeechEnabled,
+        bool? WidescreenEnabled,
+        NativeDisplayMode? DisplayMode)
     {
         public ProgressData() : this(
             "Student", [], 5, 1, OriginalCharacter.Mario, OriginalScreen.Outside,
-            [2, 5, 5, 10], [false, false, false], null, true, true, true) { }
+            [2, 5, 5, 10], [false, false, false], null, true, true, true, false,
+            NativeDisplayMode.Classic) { }
     }
 }

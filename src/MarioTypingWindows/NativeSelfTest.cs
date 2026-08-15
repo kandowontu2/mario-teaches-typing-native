@@ -150,19 +150,89 @@ internal static class NativeSelfTest
             }
             checks.Add("Original castle three-sentence batches and eased progress chase validated.");
 
+            var classicViewport = GameSurface.CalculateTargetRectangle(
+                new Rectangle(0, 0, 2520, 1080),
+                new Size(NativeGameEngine.ClassicFrameWidth, NativeGameEngine.FrameHeight));
+            var wideViewport = GameSurface.CalculateTargetRectangle(
+                new Rectangle(0, 0, 2520, 1080),
+                new Size(NativeGameEngine.WidescreenFrameWidth, NativeGameEngine.FrameHeight));
+            var ultraWideViewport = GameSurface.CalculateTargetRectangle(
+                new Rectangle(0, 0, 2520, 1080),
+                new Size(NativeGameEngine.UltraWidescreenFrameWidth, NativeGameEngine.FrameHeight));
+            if (classicViewport != new Rectangle(540, 0, 1440, 1080) ||
+                wideViewport != new Rectangle(300, 0, 1920, 1080) ||
+                ultraWideViewport != new Rectangle(0, 0, 2520, 1080))
+            {
+                throw new InvalidDataException(
+                    "Classic 4:3, widescreen 16:9, or ultra-widescreen 21:9 viewport geometry failed.");
+            }
+
+            const int testCastleConstructionFrames = 40;
+            var castleClipChecks = new (int Phase, int Frame, Rectangle? Expected)[]
+            {
+                (1, 40, null),
+                (1, 41, new Rectangle(0, 0, 47, 200)),
+                (1, 61, new Rectangle(0, 0, 47, 200)),
+                (1, 62, null),
+                (1, 101, null),
+                (1, 102, new Rectangle(272, 0, 48, 200)),
+                (1, 116, new Rectangle(272, 0, 48, 200)),
+                (1, 117, null),
+                (1, 161, null),
+                (1, 162, new Rectangle(0, 0, 320, 92)),
+                (1, 169, new Rectangle(0, 0, 320, 92)),
+                (1, 170, null),
+                (3, 53, null),
+                (3, 54, new Rectangle(0, 0, 45, 200)),
+                (3, 61, new Rectangle(0, 0, 45, 200)),
+                (3, 62, null),
+                (3, 101, null),
+                (3, 102, new Rectangle(269, 0, 51, 200)),
+                (3, 103, new Rectangle(269, 0, 51, 200)),
+                (3, 104, null),
+            };
+            foreach (var (phase, frame, expected) in castleClipChecks)
+            {
+                var actual = NativeGameEngine.OriginalCastleMarioClip(
+                    phase,
+                    frame,
+                    testCastleConstructionFrames);
+                if (actual != expected)
+                {
+                    throw new InvalidDataException(
+                        $"Castle Mario clip mismatch at phase {phase}, frame {frame}: " +
+                        $"expected {expected}, got {actual}.");
+                }
+            }
+            checks.Add("Classic 4:3, wide 16:9, and ultra-wide 21:9 viewport geometry plus all five original Castle pipe clip windows validated.");
+
             var practiceWrapped = NativeGameEngine.OriginalPracticeLine(
                 "one two three four five six seven eight nine", 0);
+            var repeatedPracticeWords = string.Join(" ", Enumerable.Repeat("word", 20));
+            var widePracticeWrapped = NativeGameEngine.PracticeLine(
+                repeatedPracticeWords,
+                0,
+                45);
+            var ultraWidePracticeWrapped = NativeGameEngine.PracticeLine(
+                repeatedPracticeWords,
+                0,
+                62);
             if (practiceWrapped.Text.Length > 32 ||
                 practiceWrapped.Text != "one two three four five six" ||
                 practiceWrapped.NextOffset != 28 ||
+                widePracticeWrapped.Text.Length != 44 ||
+                widePracticeWrapped.NextOffset != 45 ||
+                ultraWidePracticeWrapped.Text.Length != 59 ||
+                ultraWidePracticeWrapped.NextOffset != 60 ||
                 NativeGameEngine.OriginalPracticeFace(16, 50, 30) != 1 ||
                 NativeGameEngine.OriginalPracticeFace(15, 31, 30) != 3 ||
                 NativeGameEngine.OriginalPracticeFace(15, 30, 30) != 2 ||
                 NativeGameEngine.OriginalPracticeFace(15, 31, 30, hasStudent: false) != 2)
             {
-                throw new InvalidDataException("Original practice wrapping or reaction-face rules failed.");
+                throw new InvalidDataException(
+                    "Classic/extended Practice wrapping or original reaction-face rules failed.");
             }
-            checks.Add("Original Practice 32-column word wrapping and 15-tick reaction-face rules validated.");
+            checks.Add("Classic 32-column plus extended 45/62-column Practice wrapping and original 15-tick reaction-face rules validated.");
 
             if (NativeGameEngine.OriginalBonusDelaySeconds(120, 0) != 15 ||
                 NativeGameEngine.OriginalBonusDelaySeconds(120, 0x7fff) != 104 ||
@@ -324,6 +394,12 @@ internal static class NativeSelfTest
                 enableCinematics: false,
                 progressFilePath: Path.Combine(
                     Path.GetTempPath(), $"mtt-native-greeting-{Guid.NewGuid():N}.json"));
+            if (greetingTimelineEngine.MusicPlayRequestCount != 1 ||
+                greetingTimelineEngine.LastMusicSequenceNumber != 1)
+            {
+                throw new InvalidDataException(
+                    "Startup did not request the original song 1 before the title greeting.");
+            }
             var fadeStart = greetingTimelineEngine.GreetingTimelineAtMillisecondsForTest(0, greetingDelayTicks);
             var fadeFirstIntermediate = greetingTimelineEngine.GreetingTimelineAtMillisecondsForTest(58, greetingDelayTicks);
             var firstLetter = greetingTimelineEngine.GreetingTimelineAtMillisecondsForTest(6_810, greetingDelayTicks);
@@ -366,7 +442,37 @@ internal static class NativeSelfTest
                 throw new InvalidDataException(
                     $"Title reveal scheduled {greetingTimelineEngine.TitleSoundEffectCount} keyed SFX instead of 13.");
             }
-            checks.Add("Original palette fades, 20/19/6-frame logo motion, randomized 4-7 tick keyed title reveal, word-break pause, and final hold validated.");
+            greetingTimelineEngine.HandleKeyDown(Keys.Space);
+            if (greetingTimelineEngine.Screen != OriginalScreen.MainMenu ||
+                greetingTimelineEngine.MusicPlayRequestCount != 1 ||
+                greetingTimelineEngine.LastMusicSequenceNumber != 1)
+            {
+                throw new InvalidDataException(
+                    "Original song 1 did not continue from the title into the main menu.");
+            }
+            greetingTimelineEngine.HandleKeyDown(Keys.A);
+            greetingTimelineEngine.HandleKeyDown(Keys.Space);
+            if (greetingTimelineEngine.Screen != OriginalScreen.MainMenu ||
+                greetingTimelineEngine.MusicPlayRequestCount != 1)
+            {
+                throw new InvalidDataException(
+                    "Menu music did not survive an auxiliary-screen round trip.");
+            }
+            greetingTimelineEngine.HandleKeyDown(Keys.D1);
+            if (greetingTimelineEngine.Screen != OriginalScreen.Outside ||
+                greetingTimelineEngine.MusicPlayRequestCount != 2 ||
+                greetingTimelineEngine.LastMusicSequenceNumber != 1)
+            {
+                throw new InvalidDataException("Outdoor gameplay did not restart song 1.");
+            }
+            greetingTimelineEngine.HandleKeyDown(Keys.Escape);
+            if (greetingTimelineEngine.Screen != OriginalScreen.MainMenu ||
+                greetingTimelineEngine.MusicPlayRequestCount != 3 ||
+                greetingTimelineEngine.LastMusicSequenceNumber != 1)
+            {
+                throw new InvalidDataException("Returning from gameplay did not restore menu song 1.");
+            }
+            checks.Add("Original startup song 1, palette fades, 20/19/6-frame logo motion, randomized 4-7 tick keyed title reveal, word-break pause, and final hold validated.");
 
             var castleBase = CrxImage.Decode(originalAssets.ReadAllBytes("CASTLE.CRX"));
             var castleBackgrounds = CastleBackgroundDecoder.Decode(
@@ -654,6 +760,376 @@ internal static class NativeSelfTest
                 throw new InvalidDataException("Practice corpus thresholds do not match the original initializer.");
             }
             checks.Add("Original Practice letter/word/sentence thresholds validated.");
+
+            var widescreenTestPath = Path.Combine(
+                Path.GetTempPath(),
+                $"mtt-native-widescreen-{Guid.NewGuid():N}.json");
+            try
+            {
+                File.WriteAllText(widescreenTestPath, "{\"WidescreenEnabled\":true}");
+                var widescreenProfile = ProgressStore.Load(widescreenTestPath);
+                if (widescreenProfile.DisplayMode != NativeDisplayMode.Widescreen)
+                {
+                    throw new InvalidDataException(
+                        "The legacy widescreen preference did not migrate to the display mode setting.");
+                }
+                widescreenProfile.SetDisplaySettings(NativeDisplayMode.UltraWidescreen);
+                using (var ultraWideTitleEngine = new NativeGameEngine(
+                           enableAudio: false,
+                           enableCinematics: false,
+                           progressFilePath: widescreenTestPath))
+                {
+                    if (ultraWideTitleEngine.Screen != OriginalScreen.Title ||
+                        ultraWideTitleEngine.FrameWidth !=
+                            NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "The title did not start on the persisted ultra-wide canvas.");
+                    }
+                }
+                widescreenProfile.SetDisplaySettings(NativeDisplayMode.Classic);
+                widescreenProfile.SetStudentInformation(
+                    "WideTest",
+                    45,
+                    6,
+                    OriginalCharacter.Mario);
+                using (var widescreenEngine = new NativeGameEngine(
+                           enableAudio: false,
+                           enableCinematics: false,
+                           progressFilePath: widescreenTestPath))
+                {
+                    widescreenEngine.HandleKeyDown(Keys.Space);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.Classic ||
+                        widescreenEngine.WidescreenEnabled ||
+                        widescreenEngine.UltraWidescreenEnabled ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.ClassicFrameWidth)
+                    {
+                        throw new InvalidDataException("A profile did not begin in classic display mode.");
+                    }
+
+                    var displayModeChanged = 0;
+                    widescreenEngine.DisplayModeChanged += (_, _) => displayModeChanged++;
+                    widescreenEngine.HandleKeyDown(Keys.F10);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.Widescreen ||
+                        !widescreenEngine.WidescreenEnabled ||
+                        widescreenEngine.UltraWidescreenEnabled ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth ||
+                        displayModeChanged != 1 ||
+                        ProgressStore.Load(widescreenTestPath).DisplayMode !=
+                            NativeDisplayMode.Widescreen)
+                    {
+                        throw new InvalidDataException("F10 did not enable and persist widescreen mode.");
+                    }
+
+                    widescreenEngine.HandleClick(widescreenEngine.FrameWidth / 2, 4);
+                    if (widescreenEngine.ActiveMenuPopup != MainMenuPopup.Student)
+                    {
+                        throw new InvalidDataException(
+                            "Responsive widescreen Student menu hitbox was not centered.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleClick(widescreenEngine.FrameWidth - 20, 4);
+                    if (widescreenEngine.ActiveMenuPopup != MainMenuPopup.Lessons)
+                    {
+                        throw new InvalidDataException(
+                            "Responsive widescreen Lessons menu hitbox was not right-aligned.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+
+                    widescreenEngine.HandleKeyDown(Keys.A);
+                    if (widescreenEngine.Screen != OriginalScreen.About ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("About did not retain the wide framebuffer.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Space);
+                    widescreenEngine.HandleKeyDown(Keys.F1);
+                    if (widescreenEngine.Screen != OriginalScreen.Help ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("Help did not retain the wide framebuffer.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.F2);
+                    if (widescreenEngine.Screen != OriginalScreen.Keyboard ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("Keyboard did not retain the wide framebuffer.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Space);
+                    widescreenEngine.HandleKeyDown(Keys.T);
+                    if (widescreenEngine.Screen != OriginalScreen.LessonTimes ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("Lesson Times did not retain the wide framebuffer.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.C);
+                    if (widescreenEngine.Screen != OriginalScreen.Certificate ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("Certificates did not retain the wide framebuffer.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleClick(
+                        widescreenEngine.MainMenuCardHitX,
+                        149);
+                    if (widescreenEngine.Screen != OriginalScreen.ReportCard ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Centered Report Card input did not retain the wide framebuffer.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Space);
+
+                    widescreenEngine.HandleKeyDown(Keys.D1);
+                    widescreenEngine.HandleCharacter('1');
+                    if (widescreenEngine.Screen != OriginalScreen.Outside ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("Outdoor gameplay did not enter its wide framebuffer.");
+                    }
+                    widescreenEngine.AdvanceOutsideFramesForTest(1);
+                    if (widescreenEngine.OutsideTargetCount < 2 ||
+                        widescreenEngine.OutsideFarthestTargetX <= NativeGameEngine.ClassicFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Wide outdoor gameplay did not expose an additional upcoming target.");
+                    }
+                    widescreenEngine.HandleCharacter(widescreenEngine.ExpectedCharacter ??
+                        throw new InvalidDataException("Wide outdoor target lost its expected character."));
+                    widescreenEngine.AdvanceOutsideFramesForTest(7);
+                    if (widescreenEngine.OutsideCurrentForwardSpeed > 9)
+                    {
+                        throw new InvalidDataException(
+                            "A staged wide target exceeded the original outdoor speed ceiling.");
+                    }
+                    using (var wideFrame = new Bitmap(widescreenEngine.CurrentFrame))
+                    {
+                        if (wideFrame.Size != new Size(
+                                NativeGameEngine.WidescreenFrameWidth,
+                                NativeGameEngine.FrameHeight))
+                        {
+                            throw new InvalidDataException("Wide gameplay frame has the wrong pixel dimensions.");
+                        }
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.D2);
+                    widescreenEngine.HandleCharacter('2');
+                    if (widescreenEngine.Screen != OriginalScreen.Water ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("Water gameplay did not use the wide framebuffer.");
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.D3);
+                    widescreenEngine.HandleCharacter('3');
+                    if (widescreenEngine.Screen != OriginalScreen.Castle ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException("Castle gameplay did not use the wide framebuffer.");
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.D4);
+                    widescreenEngine.HandleCharacter('4');
+                    if (widescreenEngine.Screen != OriginalScreen.Practice ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.WidescreenFrameWidth ||
+                        widescreenEngine.PracticeColumnCount != 45)
+                    {
+                        throw new InvalidDataException(
+                            "Practice did not expand its paper and line width in widescreen mode.");
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.F10);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.Classic ||
+                        widescreenEngine.WidescreenEnabled ||
+                        widescreenEngine.UltraWidescreenEnabled ||
+                        displayModeChanged != 2 ||
+                        ProgressStore.Load(widescreenTestPath).DisplayMode !=
+                            NativeDisplayMode.Classic)
+                    {
+                        throw new InvalidDataException("F10 did not disable and persist classic mode.");
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.F9);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.UltraWidescreen ||
+                        widescreenEngine.WidescreenEnabled ||
+                        !widescreenEngine.UltraWidescreenEnabled ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth ||
+                        displayModeChanged != 3 ||
+                        ProgressStore.Load(widescreenTestPath).DisplayMode !=
+                            NativeDisplayMode.UltraWidescreen)
+                    {
+                        throw new InvalidDataException(
+                            "F9 did not enable and persist ultra-widescreen mode.");
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.D1);
+                    widescreenEngine.HandleCharacter('1');
+                    widescreenEngine.AdvanceOutsideFramesForTest(1);
+                    if (widescreenEngine.Screen != OriginalScreen.Outside ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth ||
+                        widescreenEngine.OutsideFarthestTargetX <=
+                            NativeGameEngine.WidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Ultra-wide outdoor gameplay did not expose its additional look-ahead.");
+                    }
+                    using (var ultraWideFrame = new Bitmap(widescreenEngine.CurrentFrame))
+                    {
+                        if (ultraWideFrame.Size != new Size(
+                                NativeGameEngine.UltraWidescreenFrameWidth,
+                                NativeGameEngine.FrameHeight))
+                        {
+                            throw new InvalidDataException(
+                                "Ultra-wide gameplay frame has the wrong pixel dimensions.");
+                        }
+                    }
+                    widescreenEngine.ActivateBonusForTest('!');
+                    widescreenEngine.HandleCharacter('!');
+                    if (widescreenEngine.Screen != OriginalScreen.BonusAnimation ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Bonus animation did not retain the ultra-wide canvas.");
+                    }
+                    widescreenEngine.FinishBonusAnimationForTest();
+
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.D2);
+                    widescreenEngine.HandleCharacter('2');
+                    if (widescreenEngine.Screen != OriginalScreen.Water ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Water gameplay did not use the ultra-wide framebuffer.");
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.D3);
+                    widescreenEngine.HandleCharacter('3');
+                    if (widescreenEngine.Screen != OriginalScreen.Castle ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Castle gameplay did not use the ultra-wide framebuffer.");
+                    }
+
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.W);
+                    if (widescreenEngine.Screen != OriginalScreen.StudentInformation ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Student Information did not retain the ultra-wide canvas.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.HandleKeyDown(Keys.L);
+                    if (widescreenEngine.Screen != OriginalScreen.LoadStudent ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Load Student did not retain the ultra-wide canvas.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Escape);
+                    widescreenEngine.StartEndingAnimationForTest();
+                    if (widescreenEngine.Screen != OriginalScreen.EndingAnimation ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Ending animation did not retain the ultra-wide canvas.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.Space);
+                    if (widescreenEngine.Screen != OriginalScreen.Blackboard ||
+                        widescreenEngine.FrameWidth != NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Blackboard did not retain the ultra-wide canvas.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.M);
+                    widescreenEngine.HandleKeyDown(Keys.F9);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.Classic ||
+                        widescreenEngine.UltraWidescreenEnabled ||
+                        displayModeChanged != 4 ||
+                        ProgressStore.Load(widescreenTestPath).DisplayMode !=
+                            NativeDisplayMode.Classic)
+                    {
+                        throw new InvalidDataException("F9 did not restore and persist classic mode.");
+                    }
+
+                    widescreenEngine.HandleClick(12, 4);
+                    if (widescreenEngine.ActiveMenuPopup != MainMenuPopup.File ||
+                        widescreenEngine.ActiveMenuItemCount != 11)
+                    {
+                        throw new InvalidDataException(
+                            "File menu did not expose both extended display commands.");
+                    }
+                    widescreenEngine.HandleClick(12, 94);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.UltraWidescreen ||
+                        !widescreenEngine.UltraWidescreenEnabled ||
+                        displayModeChanged != 5)
+                    {
+                        throw new InvalidDataException(
+                            "File-menu click did not enable ultra-widescreen mode.");
+                    }
+                    widescreenEngine.HandleClick(12, 4);
+                    widescreenEngine.HandleClick(12, 85);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.Widescreen ||
+                        !widescreenEngine.WidescreenEnabled ||
+                        widescreenEngine.UltraWidescreenEnabled ||
+                        displayModeChanged != 6)
+                    {
+                        throw new InvalidDataException(
+                            "Display modes were not mutually exclusive through the File menu.");
+                    }
+                    widescreenEngine.HandleKeyDown(Keys.F10);
+                    if (widescreenEngine.DisplayMode != NativeDisplayMode.Classic ||
+                        widescreenEngine.WidescreenEnabled ||
+                        displayModeChanged != 7)
+                    {
+                        throw new InvalidDataException("F10 did not restore classic mode after a menu toggle.");
+                    }
+                }
+                widescreenProfile.SetDisplaySettings(NativeDisplayMode.UltraWidescreen);
+                using (var ultraWideCinematicEngine = new NativeGameEngine(
+                           enableAudio: false,
+                           enableCinematics: true,
+                           progressFilePath: widescreenTestPath))
+                {
+                    ultraWideCinematicEngine.HandleKeyDown(Keys.Space);
+                    ultraWideCinematicEngine.HandleClick(
+                        ultraWideCinematicEngine.MainMenuCardHitX,
+                        20);
+                    if (ultraWideCinematicEngine.Screen != OriginalScreen.AvMovie ||
+                        ultraWideCinematicEngine.FrameWidth !=
+                            NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Native AV playback did not retain the ultra-wide canvas.");
+                    }
+                    ultraWideCinematicEngine.HandleKeyDown(Keys.Space);
+                    ultraWideCinematicEngine.HandleKeyDown(Keys.Escape);
+                    ultraWideCinematicEngine.StartMovieForTest();
+                    if (ultraWideCinematicEngine.Screen != OriginalScreen.Movie ||
+                        ultraWideCinematicEngine.FrameWidth !=
+                            NativeGameEngine.UltraWidescreenFrameWidth)
+                    {
+                        throw new InvalidDataException(
+                            "Native MVE playback did not retain the ultra-wide canvas.");
+                    }
+                    ultraWideCinematicEngine.HandleKeyDown(Keys.Space);
+                }
+                checks.Add("Backward-compatible, persistent, mutually-exclusive File-menu/F10/F9 display modes, application-wide 427x200 and 560x200 canvases, responsive main-menu and centered dialog input, seamless expanded Practice lines, extended look-ahead, and the original speed ceiling validated.");
+            }
+            finally
+            {
+                File.Delete(widescreenTestPath);
+                File.Delete(widescreenTestPath + ".tmp");
+            }
 
             var profileTestPath = Path.Combine(
                 Path.GetTempPath(),
@@ -1642,6 +2118,168 @@ internal static class NativeSelfTest
                     Save(engine, directory, "05a-practice-space-enter-checkpoint.png");
                 }
                 engine.HandleKeyDown(Keys.Escape);
+            }
+
+            var wideRenderProfile = ProgressStore.Load(renderProfilePath);
+            wideRenderProfile.SetDisplaySettings(NativeDisplayMode.Widescreen);
+            using (var wideEngine = new NativeGameEngine(
+                       enableAudio: false,
+                       enableCinematics: false,
+                       progressFilePath: renderProfilePath))
+            {
+                wideEngine.HandleKeyDown(Keys.Space);
+                wideEngine.HandleKeyDown(Keys.D1);
+                wideEngine.HandleCharacter('1');
+                wideEngine.AdvanceOutsideFramesForTest(1);
+                Save(wideEngine, directory, "08a-wide-outside-lookahead.png");
+
+                wideEngine.HandleKeyDown(Keys.Escape);
+                wideEngine.HandleKeyDown(Keys.D2);
+                wideEngine.HandleCharacter('2');
+                wideEngine.AdvanceWaterFramesForTest(10);
+                Save(wideEngine, directory, "08b-wide-water-prompt.png");
+
+                wideEngine.HandleKeyDown(Keys.Escape);
+                wideEngine.HandleKeyDown(Keys.D3);
+                wideEngine.HandleCharacter('3');
+                Save(wideEngine, directory, "08c-wide-castle-prompt.png");
+                for (var typed = 0;
+                     typed < 1000 && wideEngine.CastleSequencePhase == 0;
+                     typed++)
+                {
+                    wideEngine.HandleCharacter(wideEngine.ExpectedCharacter ??
+                        throw new InvalidDataException("Wide Castle route lost its expected character."));
+                }
+                if (wideEngine.CastleSequencePhase != 1)
+                {
+                    throw new InvalidDataException("Wide Castle route did not reach its first interlude.");
+                }
+
+                wideEngine.AdvanceCastleFramesForTest(50);
+                Save(wideEngine, directory, "08d-castle-first-left-pipe-clip.png");
+                var firstConstructionEnd = 61 + wideEngine.CastleConstructionFrameCount;
+                wideEngine.AdvanceCastleFramesForTest(
+                    firstConstructionEnd + 8 - wideEngine.CastleSequenceFrame);
+                Save(wideEngine, directory, "08e-castle-first-right-pipe-clip.png");
+                wideEngine.AdvanceCastleFramesForTest(
+                    firstConstructionEnd + 64 - wideEngine.CastleSequenceFrame);
+                Save(wideEngine, directory, "08f-castle-first-vertical-pipe-clip.png");
+                while (wideEngine.CastleSequencePhase == 1)
+                {
+                    wideEngine.AdvanceCastleFramesForTest(1);
+                }
+                for (var typed = 0;
+                     typed < 1000 && wideEngine.CastleSequencePhase == 2;
+                     typed++)
+                {
+                    wideEngine.HandleCharacter(wideEngine.ExpectedCharacter ??
+                        throw new InvalidDataException("Wide Castle second scene lost its expected character."));
+                }
+                if (wideEngine.CastleSequencePhase != 3)
+                {
+                    throw new InvalidDataException("Wide Castle route did not reach its second interlude.");
+                }
+
+                wideEngine.AdvanceCastleFramesForTest(60);
+                Save(wideEngine, directory, "08g-castle-second-left-pipe-clip.png");
+                var secondConstructionEnd = 61 + wideEngine.CastleConstructionFrameCount;
+                wideEngine.AdvanceCastleFramesForTest(
+                    secondConstructionEnd + 2 - wideEngine.CastleSequenceFrame);
+                Save(wideEngine, directory, "08h-castle-second-right-pipe-clip.png");
+            }
+
+            var ultraWideRenderProfile = ProgressStore.Load(renderProfilePath);
+            ultraWideRenderProfile.SetDisplaySettings(NativeDisplayMode.UltraWidescreen);
+            using (var ultraWideEngine = new NativeGameEngine(
+                       enableAudio: false,
+                       enableCinematics: false,
+                       progressFilePath: renderProfilePath))
+            {
+                Save(ultraWideEngine, directory, "09a-ultra-wide-title.png");
+                ultraWideEngine.SetTitleAnimationMillisecondsForTest(
+                    ultraWideEngine.TitleAllLettersVisibleMilliseconds);
+                Save(ultraWideEngine, directory, "09a2-ultra-wide-title-complete.png");
+                ultraWideEngine.HandleKeyDown(Keys.Space);
+                ultraWideEngine.SetMainMenuMovieFrameForTest(80);
+                Save(ultraWideEngine, directory, "09b-ultra-wide-main-menu.png");
+                ultraWideEngine.HandleClick(12, 4);
+                Save(ultraWideEngine, directory, "09c-ultra-wide-file-menu.png");
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+
+                ultraWideEngine.HandleKeyDown(Keys.A);
+                Save(ultraWideEngine, directory, "09d-ultra-wide-about.png");
+                ultraWideEngine.HandleKeyDown(Keys.Space);
+                ultraWideEngine.HandleKeyDown(Keys.F1);
+                Save(ultraWideEngine, directory, "09e-ultra-wide-help.png");
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+                ultraWideEngine.HandleKeyDown(Keys.F2);
+                Save(ultraWideEngine, directory, "09f-ultra-wide-keyboard.png");
+                ultraWideEngine.HandleKeyDown(Keys.Space);
+
+                ultraWideEngine.HandleKeyDown(Keys.W);
+                Save(ultraWideEngine, directory, "09g-ultra-wide-new-student.png");
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+                ultraWideEngine.HandleKeyDown(Keys.L);
+                Save(ultraWideEngine, directory, "09h-ultra-wide-load-student.png");
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+                ultraWideEngine.HandleKeyDown(Keys.T);
+                Save(ultraWideEngine, directory, "09i-ultra-wide-lesson-times.png");
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+                ultraWideEngine.HandleKeyDown(Keys.C);
+                Save(ultraWideEngine, directory, "09j-ultra-wide-certificates.png");
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+                ultraWideEngine.HandleKeyDown(Keys.D5);
+                Save(ultraWideEngine, directory, "09k-ultra-wide-report-card.png");
+                ultraWideEngine.HandleKeyDown(Keys.Space);
+                ultraWideEngine.HandleKeyDown(Keys.D4);
+                ultraWideEngine.HandleCharacter('4');
+                Save(ultraWideEngine, directory, "09l-ultra-wide-practice.png");
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+
+                ultraWideEngine.StartEndingAnimationForTest();
+                Save(ultraWideEngine, directory, "09m-ultra-wide-ending.png");
+                ultraWideEngine.HandleKeyDown(Keys.Space);
+                Save(ultraWideEngine, directory, "09n-ultra-wide-blackboard.png");
+                ultraWideEngine.HandleKeyDown(Keys.M);
+
+                ultraWideEngine.HandleKeyDown(Keys.D1);
+                ultraWideEngine.HandleCharacter('1');
+                ultraWideEngine.AdvanceOutsideFramesForTest(1);
+                Save(ultraWideEngine, directory, "10a-ultra-wide-outside-lookahead.png");
+
+                ultraWideEngine.ActivateBonusForTest('!');
+                ultraWideEngine.HandleCharacter('!');
+                ultraWideEngine.SetBonusAnimationFrameForTest(0);
+                Save(ultraWideEngine, directory, "10b-ultra-wide-bonus-animation.png");
+                ultraWideEngine.FinishBonusAnimationForTest();
+
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+                ultraWideEngine.HandleKeyDown(Keys.D2);
+                ultraWideEngine.HandleCharacter('2');
+                ultraWideEngine.AdvanceWaterFramesForTest(10);
+                Save(ultraWideEngine, directory, "10c-ultra-wide-water-prompt.png");
+
+                ultraWideEngine.HandleKeyDown(Keys.Escape);
+                ultraWideEngine.HandleKeyDown(Keys.D3);
+                ultraWideEngine.HandleCharacter('3');
+                Save(ultraWideEngine, directory, "10d-ultra-wide-castle-prompt.png");
+            }
+
+            using (var ultraWideCinematicEngine = new NativeGameEngine(
+                       enableAudio: false,
+                       enableCinematics: true,
+                       progressFilePath: renderProfilePath))
+            {
+                ultraWideCinematicEngine.HandleKeyDown(Keys.Space);
+                ultraWideCinematicEngine.HandleClick(
+                    ultraWideCinematicEngine.MainMenuCardHitX,
+                    20);
+                Save(ultraWideCinematicEngine, directory, "10e-ultra-wide-av-movie.png");
+                ultraWideCinematicEngine.HandleKeyDown(Keys.Space);
+                ultraWideCinematicEngine.HandleKeyDown(Keys.Escape);
+                ultraWideCinematicEngine.StartMovieForTest();
+                Save(ultraWideCinematicEngine, directory, "10f-ultra-wide-mve-movie.png");
+                ultraWideCinematicEngine.HandleKeyDown(Keys.Space);
             }
 
             engine.StartEndingAnimationForTest();

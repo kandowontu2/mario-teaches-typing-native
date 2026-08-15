@@ -450,15 +450,193 @@ internal sealed class NativeRaster : IDisposable
     public int Width { get; }
     public int Height { get; }
 
-    public void CopyFrom(CrxImage image)
+    public void CopyFrom(
+        CrxImage image,
+        bool repeatHorizontally = false,
+        int extensionSourceX = 0)
     {
-        if (Width != CrxImage.Width || Height != CrxImage.Height)
+        if (Width < CrxImage.Width || Height != CrxImage.Height)
         {
             throw new InvalidOperationException("CRX image dimensions do not match this framebuffer.");
         }
-        for (var index = 0; index < argb.Length; index++)
+
+        for (var y = 0; y < Height; y++)
         {
-            argb[index] = image.Palette.Argb[image.Pixels[index]];
+            var sourceRow = y * CrxImage.Width;
+            var destinationRow = y * Width;
+            for (var x = 0; x < Width; x++)
+            {
+                if (x < CrxImage.Width || repeatHorizontally)
+                {
+                    var sourceX = x < CrxImage.Width
+                        ? x
+                        : (Math.Clamp(extensionSourceX, 0, CrxImage.Width - 1) +
+                           x - CrxImage.Width) % CrxImage.Width;
+                    argb[destinationRow + x] =
+                        image.Palette.Argb[image.Pixels[sourceRow + sourceX]];
+                }
+                else
+                {
+                    argb[destinationRow + x] = Color.Black.ToArgb();
+                }
+            }
+        }
+    }
+
+    public void DrawIndexedImageHorizontallyTiled(
+        ReadOnlySpan<byte> pixels,
+        int sourceWidth,
+        int sourceHeight,
+        VgaPalette palette)
+    {
+        if (pixels.Length != checked(sourceWidth * sourceHeight) ||
+            sourceWidth <= 0 || sourceHeight != Height)
+        {
+            throw new ArgumentException(
+                "Indexed image dimensions do not match this framebuffer.",
+                nameof(pixels));
+        }
+
+        for (var y = 0; y < Height; y++)
+        {
+            var sourceRow = y * sourceWidth;
+            var destinationRow = y * Width;
+            for (var x = 0; x < Width; x++)
+            {
+                argb[destinationRow + x] = palette.Argb[pixels[sourceRow + x % sourceWidth]];
+            }
+        }
+    }
+
+    public void DrawIndexedImageHorizontallyExtended(
+        ReadOnlySpan<byte> pixels,
+        int sourceWidth,
+        int sourceHeight,
+        VgaPalette palette,
+        int extensionSourceX = 0)
+    {
+        if (pixels.Length != checked(sourceWidth * sourceHeight) ||
+            sourceWidth <= 0 || sourceHeight != Height || sourceWidth > Width)
+        {
+            throw new ArgumentException(
+                "Indexed image dimensions cannot be extended in this framebuffer.",
+                nameof(pixels));
+        }
+
+        var extensionStart = Math.Clamp(extensionSourceX, 0, sourceWidth - 1);
+        for (var y = 0; y < Height; y++)
+        {
+            var sourceRow = y * sourceWidth;
+            var destinationRow = y * Width;
+            for (var x = 0; x < Width; x++)
+            {
+                var sourceX = x < sourceWidth
+                    ? x
+                    : (extensionStart + x - sourceWidth) % sourceWidth;
+                argb[destinationRow + x] = palette.Argb[pixels[sourceRow + sourceX]];
+            }
+        }
+    }
+
+    public void DrawIndexedRegionHorizontallyTiled(
+        ReadOnlySpan<byte> pixels,
+        int sourceWidth,
+        int sourceHeight,
+        VgaPalette palette,
+        int sourceX,
+        int regionWidth)
+    {
+        if (pixels.Length != checked(sourceWidth * sourceHeight) ||
+            sourceHeight != Height || sourceX < 0 || regionWidth <= 0 ||
+            sourceX + regionWidth > sourceWidth)
+        {
+            throw new ArgumentException(
+                "Indexed source region cannot tile this framebuffer.",
+                nameof(pixels));
+        }
+
+        for (var y = 0; y < Height; y++)
+        {
+            var sourceRow = y * sourceWidth;
+            var destinationRow = y * Width;
+            for (var x = 0; x < Width; x++)
+            {
+                var tiledSourceX = sourceX + x % regionWidth;
+                argb[destinationRow + x] = palette.Argb[pixels[sourceRow + tiledSourceX]];
+            }
+        }
+    }
+
+    public void DrawIndexedRegion(
+        ReadOnlySpan<byte> pixels,
+        int sourceWidth,
+        int sourceHeight,
+        VgaPalette palette,
+        Rectangle source,
+        int destinationX,
+        int destinationY)
+    {
+        if (pixels.Length != checked(sourceWidth * sourceHeight) ||
+            source.X < 0 || source.Y < 0 || source.Width < 0 || source.Height < 0 ||
+            source.Right > sourceWidth || source.Bottom > sourceHeight)
+        {
+            throw new ArgumentException(
+                "Indexed source region lies outside its image.",
+                nameof(source));
+        }
+
+        for (var y = 0; y < source.Height; y++)
+        {
+            var targetY = destinationY + y;
+            if ((uint)targetY >= Height)
+            {
+                continue;
+            }
+            for (var x = 0; x < source.Width; x++)
+            {
+                var targetX = destinationX + x;
+                if ((uint)targetX >= Width)
+                {
+                    continue;
+                }
+                argb[targetY * Width + targetX] =
+                    palette.Argb[pixels[(source.Y + y) * sourceWidth + source.X + x]];
+            }
+        }
+    }
+
+    public void DrawIndexedImageCenteredWithEdgeExtension(
+        ReadOnlySpan<byte> pixels,
+        int sourceWidth,
+        int sourceHeight,
+        VgaPalette palette)
+    {
+        if (pixels.Length != checked(sourceWidth * sourceHeight) ||
+            sourceWidth <= 0 || sourceHeight <= 0 || sourceHeight > Height ||
+            sourceWidth > Width)
+        {
+            throw new ArgumentException(
+                "Indexed image dimensions cannot be centered in this framebuffer.",
+                nameof(pixels));
+        }
+
+        var left = (Width - sourceWidth) / 2;
+        for (var y = 0; y < Height; y++)
+        {
+            var destinationRow = y * Width;
+            if (y >= sourceHeight)
+            {
+                Array.Fill(argb, Color.Black.ToArgb(), destinationRow, Width);
+                continue;
+            }
+
+            var sourceRow = y * sourceWidth;
+            for (var x = 0; x < Width; x++)
+            {
+                var relativeX = x - left;
+                var sourceX = Math.Clamp(relativeX, 0, sourceWidth - 1);
+                argb[destinationRow + x] = palette.Argb[pixels[sourceRow + sourceX]];
+            }
         }
     }
 
@@ -506,6 +684,43 @@ internal sealed class NativeRaster : IDisposable
         }
     }
 
+    public void DrawIndexedImageWithTransparency(
+        ReadOnlySpan<byte> pixels,
+        int sourceWidth,
+        int sourceHeight,
+        VgaPalette palette,
+        ReadOnlySpan<bool> transparentPaletteEntries,
+        int x,
+        int y)
+    {
+        if (pixels.Length != checked(sourceWidth * sourceHeight))
+        {
+            throw new ArgumentException("Indexed image dimensions do not match its pixel data.", nameof(pixels));
+        }
+        if (transparentPaletteEntries.Length < palette.Argb.Length)
+        {
+            throw new ArgumentException("Transparency map does not cover the image palette.", nameof(transparentPaletteEntries));
+        }
+
+        for (var sourceY = 0; sourceY < sourceHeight; sourceY++)
+        {
+            var destinationY = y + sourceY;
+            if ((uint)destinationY >= Height)
+            {
+                continue;
+            }
+            for (var sourceX = 0; sourceX < sourceWidth; sourceX++)
+            {
+                var destinationX = x + sourceX;
+                var colorIndex = pixels[sourceY * sourceWidth + sourceX];
+                if ((uint)destinationX < Width && !transparentPaletteEntries[colorIndex])
+                {
+                    argb[destinationY * Width + destinationX] = palette.Argb[colorIndex];
+                }
+            }
+        }
+    }
+
     public void DrawIndexedHorizontalWrap(
         ReadOnlySpan<byte> pixels,
         int sourceWidth,
@@ -538,7 +753,8 @@ internal sealed class NativeRaster : IDisposable
         int x,
         int y,
         byte transparentIndex = 0,
-        bool mirrorHorizontally = false)
+        bool mirrorHorizontally = false,
+        Rectangle? clipRectangle = null)
     {
         x += sprite.X;
         y += sprite.Y;
@@ -553,7 +769,9 @@ internal sealed class NativeRaster : IDisposable
             for (var sourceX = 0; sourceX < sprite.Width; sourceX++)
             {
                 var destinationX = x + sourceX;
-                if ((uint)destinationX >= Width)
+                if ((uint)destinationX >= Width ||
+                    (clipRectangle.HasValue &&
+                     !clipRectangle.Value.Contains(destinationX, destinationY)))
                 {
                     continue;
                 }

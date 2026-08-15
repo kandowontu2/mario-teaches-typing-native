@@ -35,6 +35,9 @@ image while running.
 9. The original greeting sequence: Interplay hold, twenty generated 7/8-scale
    Mario logo frames, header movement, thirteen-letter title reveal, and final
    hold; plus the original forty-frame Castle winner ending.
+10. Optional application-wide 427x200 widescreen and 560x200 ultra-widescreen
+    framebuffers. WinForms presents them at 16:9 and 21:9 using the same
+    effective pixel aspect as the original 320x200-at-4:3 display.
 
 ## Reverse-engineering and parity status
 
@@ -66,6 +69,31 @@ coin-world playback begins from its dedicated `OUTSKY.CRX` framebuffer and
 palette before applying the character-specific `*OUT.BAN`/`*OUT.ANI` streams;
 water and castle retain their current world framebuffers, matching their three
 separate executable entry routines.
+
+The Castle transition audit also recovered five inclusive `_JaySetClipRect`
+windows from `MARCD.EXE`: two left-pipe entrances, two right-pipe entrances,
+and the vertical descent below the upper pipe lip. Native sprite plotting
+accepts the equivalent exclusive Windows rectangle and applies it to every
+character variant during those exact interlude frames.
+
+The extended display modes are explicitly non-original presentation options.
+Widescreen adds 107 logical pixels and 13 text columns; ultra-widescreen adds
+240 pixels and 30 columns. Outside stages future targets in that additional
+space, Water and Castle expose longer prompts, and Practice uses a seamless page
+wrapping at 45 or 62 columns instead of 32. The main menu independently places
+its AV movie, three headers, popups, lesson-card rail, and matching hitboxes
+across the selected canvas. Other fixed panels remain unstretched over a tiled
+copy of the original Mario wallpaper; title/ending stages use clean symmetric
+extensions. Bonus animations, AV speech, and MVE rewards retain the selected
+framebuffer as well. The original outdoor speed formula remains capped to its
+320-pixel input range. The mutually exclusive setting is global, persistent,
+and backward-compatible with the earlier widescreen progress JSON field.
+
+Startup music is likewise taken directly from the executable rather than
+inferred from the asset names: `_main` pushes `1` and calls
+`_music_playsong` immediately before `_MAINMENU`, which then runs the greeting.
+The native port starts decoded `RTYP1.XMI` at the same boundary and preserves
+it through the title and menu screens until a gameplay/movie route replaces it.
 
 Remaining 1:1 work is tracked as evidence, not substituted functionality:
 M.I.R.T. and general audiovisual fade/overlap comparisons.

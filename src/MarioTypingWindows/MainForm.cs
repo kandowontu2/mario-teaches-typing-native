@@ -13,13 +13,14 @@ internal sealed class MainForm : Form
     {
         Text = "Mario Teaches Typing";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(960, 720);
         MinimumSize = new Size(640, 480);
         BackColor = Color.Black;
         KeyPreview = true;
 
         engine = new NativeGameEngine();
+        ApplyDisplayMode();
         engine.ExitRequested += (_, _) => Close();
+        engine.DisplayModeChanged += (_, _) => ApplyDisplayMode();
         engine.CertificatePrintRequested += PrintCertificate;
         engine.StudentInformationCursorRequested += point =>
         {
@@ -97,14 +98,31 @@ internal sealed class MainForm : Form
             FormBorderStyle = FormBorderStyle.None;
             Bounds = Screen.FromControl(this).Bounds;
             TopMost = true;
+            fullScreen = true;
         }
         else
         {
             TopMost = false;
             FormBorderStyle = previousBorderStyle;
             Bounds = previousBounds;
+            fullScreen = false;
+            ApplyDisplayMode();
         }
-        fullScreen = !fullScreen;
+    }
+
+    private void ApplyDisplayMode()
+    {
+        if (fullScreen || WindowState != FormWindowState.Normal)
+        {
+            return;
+        }
+
+        ClientSize = engine.DisplayMode switch
+        {
+            NativeDisplayMode.Widescreen => new Size(1280, 720),
+            NativeDisplayMode.UltraWidescreen => new Size(1680, 720),
+            _ => new Size(960, 720),
+        };
     }
 
     private void PrintCertificate(CertificatePrintRequest request)

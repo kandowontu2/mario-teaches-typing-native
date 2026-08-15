@@ -34,6 +34,13 @@ internal enum OriginalCharacter
     Princess = 3,
 }
 
+internal enum NativeDisplayMode
+{
+    Classic,
+    Widescreen,
+    UltraWidescreen,
+}
+
 internal enum MainMenuPopup
 {
     None,
@@ -95,6 +102,10 @@ internal sealed record CertificatePrintRequest(string Student, string Level);
 
 internal sealed class NativeGameEngine : IDisposable
 {
+    internal const int ClassicFrameWidth = 320;
+    internal const int WidescreenFrameWidth = 427;
+    internal const int UltraWidescreenFrameWidth = 560;
+    internal const int FrameHeight = 200;
     private const int OriginalFrameMilliseconds = 55;
     private static readonly int[] OutsideJumpYOffsets =
         [0, -19, -26, -28, -28, -25, -20, -2, 0, 0, 0, 0];
@@ -181,7 +192,7 @@ internal sealed class NativeGameEngine : IDisposable
     [
         "About     [A]", "Help     [F1]", "Demo      [D]", "Keyboard [F2]",
         "Music     [M]", "Sound F/X [S]", "M.I.R.T   [I]", "Rap       [R]",
-        "Quit      [Q]",
+        "Widescreen [F10]", "Ultra Wide [F9]", "Quit      [Q]",
     ];
 
     private static readonly string[] StudentMenuItems =
@@ -228,7 +239,7 @@ internal sealed class NativeGameEngine : IDisposable
     ];
 
     private readonly OriginalAssetStore assets = new();
-    private readonly NativeRaster raster = new();
+    private NativeRaster raster = new();
     private readonly NativeAudioPlayer audio = new();
     private readonly ProgressStore progress;
     private readonly bool cinematicsEnabled;
@@ -278,8 +289,11 @@ internal sealed class NativeGameEngine : IDisposable
     private readonly byte[][] castleBackgroundScenes;
     private OriginalAvMovie menuMovie;
     private VgaPalette menuMoviePalette;
+    private bool[] menuMovieTransparentPaletteEntries;
     private readonly OriginalXmidiSequence[] musicSequences;
     private readonly OriginalXmidiSequence[][] soundEffectSequences;
+    private int musicPlayRequestCount;
+    private int lastMusicSequenceNumber;
     private readonly HelpLine[] helpLines;
     private readonly OriginalSprite[] titleZoomFrames;
     private readonly int[] titleLetterDelayTicks;
@@ -511,12 +525,18 @@ internal sealed class NativeGameEngine : IDisposable
         // The DOS callback writes only VGA entries 44..255 so the menu/UI
         // colors in the lower palette remain unchanged during AV playback.
         menuMoviePalette = mainMenu.Palette.WithRange(menuMovie.Palette, 44, 212);
+        menuMovieTransparentPaletteEntries = CreateMenuMovieTransparency(menuMoviePalette);
         musicSequences = Enumerable.Range(1, 4)
             .Select(number => XmidiDecoder.Decode(assets.ReadAllBytes($"RTYP{number}.XMI"))[0])
             .ToArray();
         soundEffectSequences = Enumerable.Range(1, 10)
             .Select(number => XmidiDecoder.Decode(assets.ReadAllBytes($"SFX{number:00}.RLD")).ToArray())
             .ToArray();
+
+        // MARCD.EXE _main pushes song 1 immediately before calling MAINMENU,
+        // so the original outdoor theme begins under the greeting/title and
+        // continues into the menu.
+        PlayMusicSequence(0);
 
         // This is the original embedded lesson corpus, not replacement prose.
         prompt = LessonLibrary.CreatePrompt(LessonCategory.HomeRow, ActivityMode.LetterDrill, 0);
@@ -525,6 +545,8 @@ internal sealed class NativeGameEngine : IDisposable
     }
 
     public event EventHandler? FrameChanged;
+
+    public event EventHandler? DisplayModeChanged;
 
     public event EventHandler? ExitRequested;
 
@@ -570,6 +592,28 @@ internal sealed class NativeGameEngine : IDisposable
 
     internal bool SpeechEnabled => audio.SpeechEnabled;
 
+    internal int MusicPlayRequestCount => musicPlayRequestCount;
+
+    internal int LastMusicSequenceNumber => lastMusicSequenceNumber;
+
+    internal NativeDisplayMode DisplayMode => progress.DisplayMode;
+
+    internal bool WidescreenEnabled => progress.DisplayMode == NativeDisplayMode.Widescreen;
+
+    internal bool UltraWidescreenEnabled =>
+        progress.DisplayMode == NativeDisplayMode.UltraWidescreen;
+
+    internal int FrameWidth => raster.Width;
+
+    internal int OriginalContentOffsetX => CenteredContentOffsetX;
+
+    internal int MainMenuCardHitX => MainMenuCardStripX + 18;
+
+    internal int OutsideTargetCount => outsideTargets.Count;
+
+    internal int OutsideFarthestTargetX =>
+        outsideTargets.Count == 0 ? int.MinValue : outsideTargets.Max(target => target.X);
+
     internal int SelectedLesson => selectedLesson;
 
     internal char? ExpectedCharacter => CurrentExpectedCharacter();
@@ -579,6 +623,8 @@ internal sealed class NativeGameEngine : IDisposable
 
     internal int PracticeLineLength =>
         screen == OriginalScreen.Practice ? practiceLine.Length : 0;
+
+    internal int PracticeColumnCount => PracticeTextColumns;
 
     internal char? ActiveBonusCharacter =>
         screen is (OriginalScreen.Outside or OriginalScreen.Water or OriginalScreen.Castle) && bonusFlag == 2
@@ -798,6 +844,7 @@ internal sealed class NativeGameEngine : IDisposable
         {
             rapPlaying = false;
             audio.Stop();
+            ResumeWorldMusic();
             ResumeMainMenuMovieAudio();
             RenderAndNotify();
             return;
@@ -1003,6 +1050,12 @@ internal sealed class NativeGameEngine : IDisposable
                 case Keys.R:
                     PlayRap();
                     break;
+                case Keys.F10:
+                    ToggleWidescreen();
+                    break;
+                case Keys.F9:
+                    ToggleUltraWidescreen();
+                    break;
                 case Keys.Q:
                     ExitRequested?.Invoke(this, EventArgs.Empty);
                     break;
@@ -1169,10 +1222,20 @@ internal sealed class NativeGameEngine : IDisposable
             return;
         }
 
+        if (screen is not (
+                OriginalScreen.MainMenu or
+                OriginalScreen.Outside or
+                OriginalScreen.Water or
+                OriginalScreen.Castle))
+        {
+            x -= CenteredContentOffsetX;
+        }
+
         if (rapPlaying)
         {
             rapPlaying = false;
             audio.Stop();
+            ResumeWorldMusic();
             ResumeMainMenuMovieAudio();
             RenderAndNotify();
             return;
@@ -1217,15 +1280,21 @@ internal sealed class NativeGameEngine : IDisposable
 
         if (y < 9)
         {
+            var studentHeaderLeft = raster.Width == ClassicFrameWidth
+                ? 104
+                : (raster.Width - 104) / 2;
+            var lessonsHeaderLeft = raster.Width == ClassicFrameWidth
+                ? 224
+                : raster.Width - 96;
             if (x < 72)
             {
                 OpenMenu(MainMenuPopup.File);
             }
-            else if (x is >= 104 and < 208)
+            else if (x >= studentHeaderLeft && x < studentHeaderLeft + 104)
             {
                 OpenMenu(MainMenuPopup.Student);
             }
-            else if (x >= 224)
+            else if (x >= lessonsHeaderLeft)
             {
                 OpenMenu(MainMenuPopup.Lessons);
             }
@@ -1248,7 +1317,7 @@ internal sealed class NativeGameEngine : IDisposable
             return;
         }
 
-        if (x is < 236 or >= 299)
+        if (x < MainMenuCardStripX + 4 || x >= MainMenuCardStripX + 67)
         {
             return;
         }
@@ -1817,10 +1886,10 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RequestStudentInformationCursor() =>
         StudentInformationCursorRequested?.Invoke(
-            StudentInformationFocusPoints[Math.Clamp(
+            CenteredPoint(StudentInformationFocusPoints[Math.Clamp(
                 auxiliarySelection,
                 0,
-                StudentInformationFocusPoints.Length - 1)]);
+                StudentInformationFocusPoints.Length - 1)]));
 
     private void BeginStudentInformationEdit(int field)
     {
@@ -1945,10 +2014,10 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RequestLessonTimesCursor() =>
         LessonTimesCursorRequested?.Invoke(
-            LessonTimesFocusPoints[Math.Clamp(
+            CenteredPoint(LessonTimesFocusPoints[Math.Clamp(
                 auxiliarySelection,
                 0,
-                LessonTimesFocusPoints.Length - 1)]);
+                LessonTimesFocusPoints.Length - 1)]));
 
     private void BeginLessonTimeEdit(int field)
     {
@@ -2050,15 +2119,26 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void Show(OriginalScreen next)
     {
+        var previous = screen;
+        var preserveMenuMusic = IsMenuMusicScreen(previous) && IsMenuMusicScreen(next);
         if (screen != next)
         {
-            audio.Stop();
+            if (preserveMenuMusic)
+            {
+                audio.StopSpeech();
+                audio.StopSoundEffects();
+            }
+            else
+            {
+                audio.Stop();
+            }
         }
         screen = next;
         if (next == OriginalScreen.Certificate)
         {
             auxiliarySelection = 3;
-            CertificateCursorRequested?.Invoke(CertificateFocusPoints[auxiliarySelection]);
+            CertificateCursorRequested?.Invoke(
+                CenteredPoint(CertificateFocusPoints[auxiliarySelection]));
         }
         if (next is not (OriginalScreen.Outside or OriginalScreen.Water or OriginalScreen.Castle or OriginalScreen.Practice))
         {
@@ -2104,6 +2184,10 @@ internal sealed class NativeGameEngine : IDisposable
         }
         if (next == OriginalScreen.MainMenu)
         {
+            if (!preserveMenuMusic)
+            {
+                PlayMusicSequence(0);
+            }
             if (!menuWelcomePlayed)
             {
                 menuWelcomePlayed = true;
@@ -2126,12 +2210,24 @@ internal sealed class NativeGameEngine : IDisposable
             };
             if (musicIndex >= 0)
             {
-                audio.PlayMusic(musicSequences[musicIndex], loop: true);
+                PlayMusicSequence(musicIndex);
             }
         }
         Render();
         FrameChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    private static bool IsMenuMusicScreen(OriginalScreen value) => value is
+        OriginalScreen.Title or
+        OriginalScreen.MainMenu or
+        OriginalScreen.About or
+        OriginalScreen.Help or
+        OriginalScreen.Keyboard or
+        OriginalScreen.StudentInformation or
+        OriginalScreen.LoadStudent or
+        OriginalScreen.LessonTimes or
+        OriginalScreen.Certificate or
+        OriginalScreen.ReportCard;
 
     private void StartWorld(OriginalScreen world)
     {
@@ -2314,6 +2410,9 @@ internal sealed class NativeGameEngine : IDisposable
         RenderAndNotify();
     }
 
+    internal void StartMovieForTest(int movieNumber = 1) =>
+        PlayMovie(movieNumber, OriginalScreen.MainMenu);
+
     private void PlayAvMovie(
         string cue,
         OriginalScreen destination,
@@ -2378,6 +2477,7 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void Render()
     {
+        EnsureFramebufferSize();
         switch (screen)
         {
             case OriginalScreen.Title:
@@ -2387,13 +2487,13 @@ internal sealed class NativeGameEngine : IDisposable
                 RenderMainMenu();
                 break;
             case OriginalScreen.About:
-                raster.CopyFrom(logo);
+                DrawCenteredFrame(logo);
                 break;
             case OriginalScreen.Help:
                 RenderHelp();
                 break;
             case OriginalScreen.Keyboard:
-                raster.CopyFrom(keyboard);
+                DrawCenteredUiFrame(keyboard);
                 break;
             case OriginalScreen.StudentInformation:
                 RenderStudentInformation();
@@ -2440,15 +2540,113 @@ internal sealed class NativeGameEngine : IDisposable
         }
     }
 
+    private void EnsureFramebufferSize()
+    {
+        var width = DisplayFrameWidth(progress.DisplayMode);
+        if (raster.Width == width)
+        {
+            return;
+        }
+
+        raster.Dispose();
+        raster = new NativeRaster(width, FrameHeight);
+    }
+
+    internal static int DisplayFrameWidth(NativeDisplayMode mode) => mode switch
+    {
+        NativeDisplayMode.Widescreen => WidescreenFrameWidth,
+        NativeDisplayMode.UltraWidescreen => UltraWidescreenFrameWidth,
+        _ => ClassicFrameWidth,
+    };
+
+    private int CenteredContentOffsetX => Math.Max(0, (raster.Width - ClassicFrameWidth) / 2);
+
+    private int CenteredX(int originalX) => CenteredContentOffsetX + originalX;
+
+    private Point CenteredPoint(Point original) =>
+        new(CenteredX(original.X), original.Y);
+
+    private void DrawCenteredFrame(CrxImage image) =>
+        raster.DrawIndexedImageCenteredWithEdgeExtension(
+            image.Pixels,
+            CrxImage.Width,
+            CrxImage.Height,
+            image.Palette);
+
+    private void DrawCenteredFrame(
+        ReadOnlySpan<byte> pixels,
+        int width,
+        int height,
+        VgaPalette palette) =>
+        raster.DrawIndexedImageCenteredWithEdgeExtension(
+            pixels,
+            width,
+            height,
+            palette);
+
+    private void DrawMarioWallpaper()
+    {
+        raster.DrawIndexedRegionHorizontallyTiled(
+            mainMenu.Pixels,
+            ClassicFrameWidth,
+            FrameHeight,
+            mainMenu.Palette,
+            sourceX: 0,
+            regionWidth: 232);
+    }
+
+    private void DrawCenteredUiFrame(CrxImage image)
+    {
+        if (raster.Width == ClassicFrameWidth)
+        {
+            raster.CopyFrom(image);
+            return;
+        }
+
+        DrawMarioWallpaper();
+        raster.DrawIndexedImage(
+            image.Pixels,
+            ClassicFrameWidth,
+            FrameHeight,
+            image.Palette,
+            CenteredContentOffsetX,
+            0);
+    }
+
     private void RenderAvMovie()
     {
         if (activeAvMovie is null || activeAvPalette is null || activeAvBackdrop is null)
         {
-            raster.FillRectangle(0, 0, 320, 200, Color.Black.ToArgb());
+            raster.FillRectangle(0, 0, raster.Width, FrameHeight, Color.Black.ToArgb());
             return;
         }
 
-        raster.CopyFrom(activeAvBackdrop);
+        var worldBackdrop = ReferenceEquals(activeAvBackdrop, outside) ||
+                            ReferenceEquals(activeAvBackdrop, water) ||
+                            ReferenceEquals(activeAvBackdrop, castle);
+        if (ReferenceEquals(activeAvBackdrop, outside))
+        {
+            raster.CopyFrom(outside, repeatHorizontally: raster.Width > ClassicFrameWidth);
+        }
+        else if (ReferenceEquals(activeAvBackdrop, water))
+        {
+            raster.CopyFrom(
+                water,
+                repeatHorizontally: raster.Width > ClassicFrameWidth,
+                extensionSourceX: Math.Max(0, ClassicFrameWidth * 2 - raster.Width));
+        }
+        else if (ReferenceEquals(activeAvBackdrop, castle))
+        {
+            raster.DrawIndexedImageHorizontallyTiled(
+                castle.Pixels,
+                ClassicFrameWidth,
+                FrameHeight,
+                castle.Palette);
+        }
+        else
+        {
+            DrawCenteredFrame(activeAvBackdrop);
+        }
         if (ReferenceEquals(activeAvBackdrop, blackboard))
         {
             DrawBlackboardContents();
@@ -2462,7 +2660,7 @@ internal sealed class NativeGameEngine : IDisposable
             OriginalAvMovie.Width,
             OriginalAvMovie.Height,
             activeAvPalette,
-            activeAvX,
+            worldBackdrop ? activeAvX : CenteredX(activeAvX),
             activeAvY);
     }
 
@@ -2502,7 +2700,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster.DrawSprite(
                     sprite,
                     timeline.Palette,
-                    160 - sprite.Width / 2,
+                    CenteredX(160 - sprite.Width / 2),
                     100 - sprite.Height / 2);
                 return;
             }
@@ -2513,7 +2711,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster.DrawSprite(
                     sprite,
                     timeline.Palette,
-                    160 - sprite.Width / 2,
+                    CenteredX(160 - sprite.Width / 2),
                     100 - sprite.Height / 2);
                 return;
             }
@@ -2526,7 +2724,7 @@ internal sealed class NativeGameEngine : IDisposable
                     raster.DrawSprite(
                         sprite,
                         timeline.Palette,
-                        160 - sprite.Width / 2 - (timeline.Frame + 1) * 14,
+                        CenteredX(160 - sprite.Width / 2 - (timeline.Frame + 1) * 14),
                         100 - sprite.Height / 2 - (timeline.Frame + 1) * 11);
                 }
                 else
@@ -2534,7 +2732,7 @@ internal sealed class NativeGameEngine : IDisposable
                     raster.DrawSprite(
                         greetingObjects["smario_1"],
                         timeline.Palette,
-                        7,
+                        CenteredX(7),
                         2);
                 }
                 return;
@@ -2549,13 +2747,42 @@ internal sealed class NativeGameEngine : IDisposable
             raster.DrawSprite(
                 greetingObjects[$"greettxt_{greetingText[index]}"],
                 timeline.Palette,
-                GreetingTextXPositions[index],
+                CenteredX(GreetingTextXPositions[index]),
                 7);
         }
     }
 
-    private void DrawTitleFrame(CrxImage image, VgaPalette palette) =>
-        raster.DrawIndexedImage(image.Pixels, CrxImage.Width, CrxImage.Height, palette, 0, 0);
+    private void DrawTitleFrame(CrxImage image, VgaPalette palette)
+    {
+        if (raster.Width == ClassicFrameWidth)
+        {
+            raster.DrawIndexedImage(
+                image.Pixels,
+                CrxImage.Width,
+                CrxImage.Height,
+                palette,
+                0,
+                0);
+            return;
+        }
+
+        // Title artwork occupies almost the complete source width, so extending
+        // an edge column produces conspicuous horizontal bands. A palette-aware
+        // solid stage color keeps every fade clean and the original frame exact.
+        raster.FillRectangle(
+            0,
+            0,
+            raster.Width,
+            FrameHeight,
+            palette.Argb[image.Pixels[0]]);
+        raster.DrawIndexedImage(
+            image.Pixels,
+            CrxImage.Width,
+            CrxImage.Height,
+            palette,
+            CenteredContentOffsetX,
+            0);
+    }
 
     private static int[] CreateGreetingLetterDelayTicks(Random? random = null)
     {
@@ -2770,7 +2997,7 @@ internal sealed class NativeGameEngine : IDisposable
     {
         if (activeBonusPalette is null || ActiveBonusAnimationFrameCount == 0)
         {
-            raster.FillRectangle(0, 0, 320, 200, Color.Black.ToArgb());
+            raster.FillRectangle(0, 0, raster.Width, FrameHeight, Color.Black.ToArgb());
             return;
         }
 
@@ -2782,11 +3009,27 @@ internal sealed class NativeGameEngine : IDisposable
         {
             var background = activeBonusBackgroundFrames[
                 Math.Min(frame, activeBonusBackgroundFrames.Count - 1)];
-            raster.DrawIndexedImage(background, 320, 200, activeBonusPalette, 0, 0);
+            if (bonusAnimationDestination == OriginalScreen.Castle)
+            {
+                raster.DrawIndexedImageHorizontallyTiled(
+                    background,
+                    ClassicFrameWidth,
+                    FrameHeight,
+                    activeBonusPalette);
+            }
+            else
+            {
+                raster.DrawIndexedImageHorizontallyExtended(
+                    background,
+                    ClassicFrameWidth,
+                    FrameHeight,
+                    activeBonusPalette,
+                    extensionSourceX: Math.Max(0, ClassicFrameWidth * 2 - raster.Width));
+            }
         }
         else
         {
-            raster.FillRectangle(0, 0, 320, 200, Color.Black.ToArgb());
+            raster.FillRectangle(0, 0, raster.Width, FrameHeight, Color.Black.ToArgb());
         }
 
         if (activeBonusCharacterFrames is { Count: > 0 } && frame < activeBonusCharacterFrames.Count)
@@ -2831,9 +3074,16 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RenderEndingAnimation()
     {
+        raster.FillRectangle(0, 0, raster.Width, FrameHeight, Color.Black.ToArgb());
         if (endingAnimationFrames is null || endingAnimationFrames.Count == 0)
         {
-            raster.CopyFrom(ending);
+            raster.DrawIndexedImage(
+                ending.Pixels,
+                CrxImage.Width,
+                CrxImage.Height,
+                ending.Palette,
+                CenteredContentOffsetX,
+                0);
             return;
         }
         var frame = (int)Math.Min(
@@ -2845,7 +3095,7 @@ internal sealed class NativeGameEngine : IDisposable
             CrxImage.Width,
             CrxImage.Height,
             ending.Palette,
-            0,
+            CenteredContentOffsetX,
             0);
     }
 
@@ -2869,7 +3119,7 @@ internal sealed class NativeGameEngine : IDisposable
     {
         if (activeMovie is null || activeMovie.Frames.Count == 0)
         {
-            raster.FillRectangle(0, 0, 320, 200, Color.Black.ToArgb());
+            raster.FillRectangle(0, 0, raster.Width, FrameHeight, Color.Black.ToArgb());
             return;
         }
         var elapsedMicroseconds = Math.Max(0, clock.ElapsedMilliseconds - sceneStarted) * 1000;
@@ -2878,18 +3128,16 @@ internal sealed class NativeGameEngine : IDisposable
             activeMovie.Frames.Count - 1,
             elapsedMicroseconds / frameDuration);
         var frame = activeMovie.Frames[frameIndex];
-        raster.DrawIndexedImage(
+        DrawCenteredFrame(
             frame.Pixels,
             activeMovie.Width,
             activeMovie.Height,
-            frame.Palette,
-            0,
-            0);
+            frame.Palette);
     }
 
     private void RenderHelp()
     {
-        raster.CopyFrom(help);
+        DrawCenteredUiFrame(help);
         var black = help.Palette.FindNearest(0, 0, 0);
         var blue = help.Palette.FindNearest(0, 80, 255);
         for (var row = 0; row < 17 && helpScroll + row < helpLines.Length; row++)
@@ -2899,7 +3147,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 help.Palette,
                 line.Text,
-                16,
+                CenteredX(16),
                 29 + row * 8,
                 35,
                 foregroundIndex: line.Heading ? blue : black);
@@ -2908,7 +3156,7 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RenderStudentInformation()
     {
-        raster.CopyFrom(studentInformation);
+        DrawCenteredUiFrame(studentInformation);
         var white = studentInformation.Palette.FindNearest(255, 255, 255);
         if (newStudentNamePending)
         {
@@ -2916,7 +3164,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 studentInformation.Palette,
                 "New Student Name:",
-                64,
+                CenteredX(64),
                 96,
                 foregroundIndex: white);
             font3.Draw(
@@ -2924,7 +3172,7 @@ internal sealed class NativeGameEngine : IDisposable
                 studentInformation.Palette,
                 studentNameEntry +
                 ((clock.ElapsedMilliseconds / 350 & 1) == 0 ? "_" : " "),
-                200,
+                CenteredX(200),
                 96,
                 9,
                 foregroundIndex: white);
@@ -2945,7 +3193,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 studentInformation.Palette,
                 values[index],
-                64,
+                CenteredX(64),
                 yPositions[index],
                 foregroundIndex: white);
         }
@@ -2959,26 +3207,32 @@ internal sealed class NativeGameEngine : IDisposable
         raster.DrawSprite(
             greetingUiObjects["prefbox_1"],
             studentInformation.Palette,
-            characterX,
+            CenteredX(characterX),
             130);
     }
 
     private void RenderLoadStudent()
     {
-        raster.CopyFrom(loadStudent);
+        DrawCenteredUiFrame(loadStudent);
         var white = loadStudent.Palette.FindNearest(255, 255, 255);
         var black = loadStudent.Palette.FindNearest(0, 0, 0);
         var blue = loadStudent.Palette.FindNearest(0, 0, 180);
         if (loadStudentNames.Length == 0)
         {
-            font5.Draw(raster, loadStudent.Palette, "No Students!", 112, 96, foregroundIndex: black);
+            font5.Draw(
+                raster,
+                loadStudent.Palette,
+                "No Students!",
+                CenteredX(112),
+                96,
+                foregroundIndex: black);
             return;
         }
         for (var index = 0; index < Math.Min(30, loadStudentNames.Length); index++)
         {
             var column = index / 10;
             var row = index % 10;
-            var x = 40 + column * 80;
+            var x = CenteredX(40 + column * 80);
             var y = 64 + row * 8;
             if (index == auxiliarySelection)
             {
@@ -2997,7 +3251,7 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RenderLessonTimes()
     {
-        raster.CopyFrom(lessonTimes);
+        DrawCenteredUiFrame(lessonTimes);
         var black = lessonTimes.Palette.FindNearest(0, 0, 0);
         var labels = new[] { "Outside", "Underwater", "Underground", "Practice" };
         for (var index = 0; index < lessonTimesDraft.Length; index++)
@@ -3007,14 +3261,14 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 lessonTimes.Palette,
                 labels[index],
-                66,
+                CenteredX(66),
                 y,
                 foregroundIndex: black);
             font5.Draw(
                 raster,
                 lessonTimes.Palette,
                 $"{lessonTimesDraft[index],2}  mins",
-                190,
+                CenteredX(190),
                 y,
                 foregroundIndex: black);
         }
@@ -3022,7 +3276,7 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RenderCertificate()
     {
-        raster.CopyFrom(certificate);
+        DrawCenteredUiFrame(certificate);
         var black = certificate.Palette.FindNearest(0, 0, 0);
 
         if (!HasAnyCertificate())
@@ -3031,7 +3285,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 certificate.Palette,
                 "You have not yet earned a\ncertificate! Keep trying!",
-                42,
+                CenteredX(42),
                 91,
                 foregroundIndex: black);
             return;
@@ -3041,7 +3295,7 @@ internal sealed class NativeGameEngine : IDisposable
             raster,
             certificate.Palette,
             "You may print the following\ncertificates:",
-            42,
+            CenteredX(42),
             80,
             foregroundIndex: black);
         for (var index = 0; index < CertificateWorlds.Length; index++)
@@ -3054,7 +3308,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 certificate.Palette,
                 CertificateLevelNames[index],
-                80,
+                CenteredX(80),
                 104 + index * 8,
                 foregroundIndex: black);
         }
@@ -3062,14 +3316,14 @@ internal sealed class NativeGameEngine : IDisposable
             raster,
             certificate.Palette,
             "Make sure your printer is ready,\nand select line to print!",
-            48,
+            CenteredX(48),
             144,
             foregroundIndex: black);
     }
 
     private void RenderBlackboard()
     {
-        raster.CopyFrom(blackboard);
+        DrawCenteredFrame(blackboard);
         DrawBlackboardContents();
     }
 
@@ -3101,7 +3355,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 blackboard.Palette,
                 text,
-                40,
+                CenteredX(40),
                 y,
                 foregroundIndex: labelColor);
         }
@@ -3122,7 +3376,7 @@ internal sealed class NativeGameEngine : IDisposable
                 raster,
                 blackboard.Palette,
                 text,
-                136,
+                CenteredX(136),
                 y,
                 foregroundIndex: valueColor);
         }
@@ -3150,12 +3404,12 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RenderMainMenu()
     {
-        raster.CopyFrom(mainMenu);
+        DrawMainMenuBackdrop();
         var yellow = mainMenu.Palette.Argb[mainMenu.Palette.FindNearest(255, 255, 0)];
-        raster.FillRectangle(0, 0, 320, 8, yellow);
+        raster.FillRectangle(0, 0, raster.Width, 8, yellow);
         font5.Draw(raster, mainMenu.Palette, "File", 0, 0);
-        font5.Draw(raster, mainMenu.Palette, "Student", 112, 0);
-        font5.Draw(raster, mainMenu.Palette, "Lessons", 232, 0);
+        font5.Draw(raster, mainMenu.Palette, "Student", MainMenuStudentHeaderX, 0);
+        font5.Draw(raster, mainMenu.Palette, "Lessons", MainMenuLessonsHeaderX, 0);
 
         // The original executable selects one Z8/Z9/Z52 welcome clip, then
         // selects from its 24-entry idle cue table after a randomized pause.
@@ -3168,16 +3422,56 @@ internal sealed class NativeGameEngine : IDisposable
                 menuMovie.Frames.Count - 1,
                 (int)(Math.Max(0, clock.ElapsedMilliseconds - menuMovieStarted) *
                       OriginalAvMovie.FramesPerSecond / 1000));
-            raster.DrawIndexedImage(
+            raster.DrawIndexedImageWithTransparency(
                 menuMovie.Frames[frame],
                 OriginalAvMovie.Width,
                 OriginalAvMovie.Height,
                 menuMoviePalette,
-                5,
+                menuMovieTransparentPaletteEntries,
+                MainMenuMovieX,
                 20);
         }
 
         DrawMainMenuOverlay();
+    }
+
+    private int MainMenuCardStripX => raster.Width == ClassicFrameWidth
+        ? 232
+        : raster.Width - 88;
+
+    private int MainMenuMovieX => raster.Width == ClassicFrameWidth
+        ? 5
+        : 5 + (raster.Width - ClassicFrameWidth) / 4;
+
+    private int MainMenuStudentHeaderX => raster.Width == ClassicFrameWidth
+        ? 112
+        : (raster.Width - 56) / 2;
+
+    private int MainMenuLessonsHeaderX => raster.Width == ClassicFrameWidth
+        ? 232
+        : raster.Width - 88;
+
+    private void DrawMainMenuBackdrop()
+    {
+        if (raster.Width == ClassicFrameWidth)
+        {
+            raster.CopyFrom(mainMenu);
+            return;
+        }
+
+        // The left 232 pixels contain the original repeating purple wallpaper;
+        // the final 88 contain the lesson-card rail and its shadow. Recompose
+        // those regions so the controls occupy the full selected canvas instead
+        // of leaving a centered 4:3 island or cloning clickable cards.
+        DrawMarioWallpaper();
+        raster.DrawIndexedRegion(
+            mainMenu.Pixels,
+            ClassicFrameWidth,
+            FrameHeight,
+            mainMenu.Palette,
+            new Rectangle(232, 0, 88, FrameHeight),
+            MainMenuCardStripX,
+            0);
     }
 
     private void DrawMainMenuOverlay()
@@ -3186,13 +3480,13 @@ internal sealed class NativeGameEngine : IDisposable
         {
             var yellow = mainMenu.Palette.FindNearest(255, 255, 0);
             var black = mainMenu.Palette.FindNearest(0, 0, 0);
-            raster.FillRectangle(39, 72, 242, 52, mainMenu.Palette.Argb[black]);
-            raster.FillRectangle(41, 74, 238, 48, mainMenu.Palette.Argb[yellow]);
+            raster.FillRectangle(CenteredX(39), 72, 242, 52, mainMenu.Palette.Argb[black]);
+            raster.FillRectangle(CenteredX(41), 74, 238, 48, mainMenu.Palette.Argb[yellow]);
             font5.Draw(
                 raster,
                 mainMenu.Palette,
                 statusMessage,
-                57,
+                CenteredX(57),
                 84,
                 27,
                 foregroundIndex: black);
@@ -3203,10 +3497,22 @@ internal sealed class NativeGameEngine : IDisposable
         {
             var yellow = mainMenu.Palette.FindNearest(255, 255, 0);
             var black = mainMenu.Palette.FindNearest(0, 0, 0);
-            raster.FillRectangle(47, 76, 226, 45, mainMenu.Palette.Argb[black]);
-            raster.FillRectangle(49, 78, 222, 41, mainMenu.Palette.Argb[yellow]);
-            font5.Draw(raster, mainMenu.Palette, "Playing CD Track", 89, 84, foregroundIndex: black);
-            font5.Draw(raster, mainMenu.Palette, "Press any key to stop", 77, 102, foregroundIndex: black);
+            raster.FillRectangle(CenteredX(47), 76, 226, 45, mainMenu.Palette.Argb[black]);
+            raster.FillRectangle(CenteredX(49), 78, 222, 41, mainMenu.Palette.Argb[yellow]);
+            font5.Draw(
+                raster,
+                mainMenu.Palette,
+                "Playing CD Track",
+                CenteredX(89),
+                84,
+                foregroundIndex: black);
+            font5.Draw(
+                raster,
+                mainMenu.Palette,
+                "Press any key to stop",
+                CenteredX(77),
+                102,
+                foregroundIndex: black);
             return;
         }
 
@@ -3233,6 +3539,10 @@ internal sealed class NativeGameEngine : IDisposable
                 MainMenuPopup.File when index == 4 && audio.MusicEnabled => "*",
                 MainMenuPopup.File when index == 5 && audio.SoundEffectsEnabled => "*",
                 MainMenuPopup.File when index == 6 && audio.SpeechEnabled => "*",
+                MainMenuPopup.File when index == 8 &&
+                    progress.DisplayMode == NativeDisplayMode.Widescreen => "*",
+                MainMenuPopup.File when index == 9 &&
+                    progress.DisplayMode == NativeDisplayMode.UltraWidescreen => "*",
                 _ => " ",
             };
             font5.Draw(
@@ -3267,7 +3577,9 @@ internal sealed class NativeGameEngine : IDisposable
                 Keys.S => 5,
                 Keys.I => 6,
                 Keys.R => 7,
-                Keys.Q => 8,
+                Keys.F10 => 8,
+                Keys.F9 => 9,
+                Keys.Q => 10,
                 _ => -1,
             },
             MainMenuPopup.Student => key switch
@@ -3330,6 +3642,14 @@ internal sealed class NativeGameEngine : IDisposable
                     PlayRap();
                 }
                 else if (index == 8)
+                {
+                    ToggleWidescreen();
+                }
+                else if (index == 9)
+                {
+                    ToggleUltraWidescreen();
+                }
+                else if (index == 10)
                 {
                     ExitRequested?.Invoke(this, EventArgs.Empty);
                 }
@@ -3403,9 +3723,9 @@ internal sealed class NativeGameEngine : IDisposable
         RenderAndNotify();
     }
 
-    private static OriginalScreen? MainMenuWorldAt(int x, int y)
+    private OriginalScreen? MainMenuWorldAt(int x, int y)
     {
-        if (x is < 236 or >= 299)
+        if (x < MainMenuCardStripX + 4 || x >= MainMenuCardStripX + 67)
         {
             return null;
         }
@@ -3435,6 +3755,28 @@ internal sealed class NativeGameEngine : IDisposable
         RenderAndNotify();
     }
 
+    private void ToggleWidescreen()
+    {
+        SetDisplayMode(progress.DisplayMode == NativeDisplayMode.Widescreen
+            ? NativeDisplayMode.Classic
+            : NativeDisplayMode.Widescreen);
+    }
+
+    private void ToggleUltraWidescreen()
+    {
+        SetDisplayMode(progress.DisplayMode == NativeDisplayMode.UltraWidescreen
+            ? NativeDisplayMode.Classic
+            : NativeDisplayMode.UltraWidescreen);
+    }
+
+    private void SetDisplayMode(NativeDisplayMode mode)
+    {
+        progress.SetDisplaySettings(mode);
+        menuPopup = MainMenuPopup.None;
+        DisplayModeChanged?.Invoke(this, EventArgs.Empty);
+        RenderAndNotify();
+    }
+
     private void PersistAudioSettings() => progress.SetAudioSettings(
         audio.MusicEnabled,
         audio.SoundEffectsEnabled,
@@ -3444,6 +3786,7 @@ internal sealed class NativeGameEngine : IDisposable
     {
         var musicIndex = screen switch
         {
+            OriginalScreen.Title or OriginalScreen.MainMenu => 0,
             OriginalScreen.Outside => 0,
             OriginalScreen.Water => 1,
             OriginalScreen.Castle => 2,
@@ -3452,8 +3795,16 @@ internal sealed class NativeGameEngine : IDisposable
         };
         if (musicIndex >= 0)
         {
-            audio.PlayMusic(musicSequences[musicIndex], loop: true);
+            PlayMusicSequence(musicIndex);
         }
+    }
+
+    private void PlayMusicSequence(int zeroBasedIndex)
+    {
+        var index = Math.Clamp(zeroBasedIndex, 0, musicSequences.Length - 1);
+        musicPlayRequestCount++;
+        lastMusicSequenceNumber = index + 1;
+        audio.PlayMusic(musicSequences[index], loop: true);
     }
 
     internal static IReadOnlyList<string>? EligibleWorldCues(
@@ -3507,10 +3858,57 @@ internal sealed class NativeGameEngine : IDisposable
     {
         menuMovie = AvDecoder.Decode(assets.ReadAllBytes($"MOVIES/{cue}.AV"));
         menuMoviePalette = mainMenu.Palette.WithRange(menuMovie.Palette, 44, 212);
+        menuMovieTransparentPaletteEntries = CreateMenuMovieTransparency(menuMoviePalette);
         menuMovieStarted = clock.ElapsedMilliseconds;
         menuMoviePlaying = true;
         menuIdleMovieDue = long.MaxValue;
         audio.PlayAv(menuMovie, loop: false);
+    }
+
+    private bool[] CreateMenuMovieTransparency(VgaPalette palette)
+    {
+        // Every menu AV was recorded over the four-shade purple wallpaper.
+        // Its palette preserves the red/green DAC channels but slightly shifts
+        // blue, so drawing the recorded background makes the lettering appear
+        // pasted into a rectangle. Key those four shades out and let the one
+        // continuous responsive menu wallpaper show through behind Mario.
+        var wallpaperChannels = new HashSet<(byte Red, byte Green)>();
+        for (var y = 8; y < FrameHeight; y++)
+        {
+            for (var x = 0; x < 232; x++)
+            {
+                var color = Color.FromArgb(
+                    mainMenu.Palette.Argb[mainMenu.Pixels[y * ClassicFrameWidth + x]]);
+                if (color.B > color.R)
+                {
+                    wallpaperChannels.Add((color.R, color.G));
+                }
+            }
+        }
+
+        var transparent = new bool[palette.Argb.Length];
+        for (var index = 0; index < transparent.Length; index++)
+        {
+            var color = Color.FromArgb(palette.Argb[index]);
+            transparent[index] = color.B > color.R &&
+                                 wallpaperChannels.Contains((color.R, color.G));
+        }
+        return transparent;
+    }
+
+    internal void SetMainMenuMovieFrameForTest(int frame)
+    {
+        if (screen != OriginalScreen.MainMenu || !menuMoviePlaying || menuMovie.Frames.Count == 0)
+        {
+            throw new InvalidOperationException("The main-menu movie is not active.");
+        }
+
+        var clampedFrame = Math.Clamp(frame, 0, menuMovie.Frames.Count - 1);
+        var elapsedMilliseconds =
+            (clampedFrame * 1000L + OriginalAvMovie.FramesPerSecond - 1) /
+            OriginalAvMovie.FramesPerSecond;
+        menuMovieStarted = clock.ElapsedMilliseconds - elapsedMilliseconds;
+        Render();
     }
 
     private void UpdateMainMenuMovie()
@@ -3573,6 +3971,7 @@ internal sealed class NativeGameEngine : IDisposable
     {
         menuPopup = MainMenuPopup.None;
         rapPlaying = true;
+        audio.Stop();
         audio.PlayMusicWave(EmbeddedAssets.OpenCdAudioTrack(), loop: false);
         RenderAndNotify();
     }
@@ -3585,14 +3984,22 @@ internal sealed class NativeGameEngine : IDisposable
         _ => [],
     };
 
-    private static (int Left, int Top, int Width, int Height) PopupBounds(MainMenuPopup popup)
+    private (int Left, int Top, int Width, int Height) PopupBounds(MainMenuPopup popup)
     {
         var items = PopupItems(popup);
         return popup switch
         {
-            MainMenuPopup.File => (0, 9, 120, items.Length * 9),
-            MainMenuPopup.Student => (104, 9, 120, items.Length * 9),
-            MainMenuPopup.Lessons => (168, 9, 151, items.Length * 9),
+            MainMenuPopup.File => (0, 9, 144, items.Length * 9),
+            MainMenuPopup.Student => (
+                raster.Width == ClassicFrameWidth ? 104 : (raster.Width - 120) / 2,
+                9,
+                120,
+                items.Length * 9),
+            MainMenuPopup.Lessons => (
+                raster.Width == ClassicFrameWidth ? 168 : raster.Width - 152,
+                9,
+                151,
+                items.Length * 9),
             _ => (0, 0, 0, 0),
         };
     }
@@ -3880,7 +4287,7 @@ internal sealed class NativeGameEngine : IDisposable
         outsideAnimationCounter = 0;
         outsideLastStateUpdate = sceneStarted;
         InitializeBonusState();
-        SpawnOutsideTarget();
+        SpawnOutsideTarget(initial: true);
         SelectOutsideTarget();
     }
 
@@ -3911,7 +4318,8 @@ internal sealed class NativeGameEngine : IDisposable
         outsideGroundOffset = (outsideGroundOffset + outsideForwardSpeed) % 20;
         StepOutsideMario();
 
-        if (outsideTargets.Count < 10 && outsideTargets.All(target => target.X <= 220))
+        if (outsideTargets.Count < 10 &&
+            outsideTargets.All(target => target.X <= OutsideViewportWidth - 100))
         {
             SpawnOutsideTarget();
         }
@@ -3961,7 +4369,8 @@ internal sealed class NativeGameEngine : IDisposable
             particle.VerticalVelocity++;
         }
         outsideParticles.RemoveAll(particle =>
-            particle.X < 0 || particle.X > 309 || particle.Y < 0 || particle.Y > 131);
+            particle.X < 0 || particle.X > OutsideViewportWidth - 11 ||
+            particle.Y < 0 || particle.Y > 131);
     }
 
     private void StepOutsideMario()
@@ -3978,7 +4387,10 @@ internal sealed class NativeGameEngine : IDisposable
         outsideMarioX = Math.Max(0, outsideMarioX + horizontalDelta);
 
         var targetX = outsideSelectedTarget?.X ?? 319;
-        outsideForwardSpeed = OriginalOutsideForwardSpeed(targetX);
+        // Wide mode may stage the next target beyond x=319. Preserve the DOS
+        // speed ceiling until that target reaches the original playfield.
+        outsideForwardSpeed = OriginalOutsideForwardSpeed(
+            Math.Min(targetX, ClassicFrameWidth - 1));
 
         if (outsideMarioPhase == 0)
         {
@@ -4012,7 +4424,9 @@ internal sealed class NativeGameEngine : IDisposable
         }
     }
 
-    private void SpawnOutsideTarget()
+    private int OutsideViewportWidth => DisplayFrameWidth(progress.DisplayMode);
+
+    private void SpawnOutsideTarget(bool initial = false)
     {
         if (prompt.Length == 0 || outsideTargets.Count >= 10)
         {
@@ -4029,14 +4443,20 @@ internal sealed class NativeGameEngine : IDisposable
         while (PromptCharacterAt(prompt, promptIndex) <= ' ' && attempts <= prompt.Length);
 
         var kind = outsideRandom.Next(2) + 1;
+        var viewportWidth = initial ? ClassicFrameWidth : OutsideViewportWidth;
         outsideTargets.Add(kind == 1
             ? new OutsideTarget(
                 promptIndex,
                 kind,
-                x: 293,
+                x: viewportWidth - 27,
                 OutsideBrickYPositions[outsideRandom.Next(OutsideBrickYPositions.Length)],
                 spriteXOffset: 0)
-            : new OutsideTarget(promptIndex, kind, x: 283, y: 123, spriteXOffset: 30));
+            : new OutsideTarget(
+                promptIndex,
+                kind,
+                x: viewportWidth - 37,
+                y: 123,
+                spriteXOffset: 30));
     }
 
     private void SelectOutsideTarget()
@@ -4731,6 +5151,29 @@ internal sealed class NativeGameEngine : IDisposable
             ? currentVelocity + 1
             : currentVelocity > desiredVelocity ? currentVelocity - 1 : currentVelocity;
 
+    internal static Rectangle? OriginalCastleMarioClip(
+        int sequencePhase,
+        int sequenceFrame,
+        int constructionFrames)
+    {
+        var constructionEnd = 61 + constructionFrames;
+        return sequencePhase switch
+        {
+            // The original uses inclusive JaySetClipRect bounds. These five
+            // windows hide the character behind the left/right pipe mouths and
+            // below the upper pipe lip while preserving partially visible pixels.
+            1 when sequenceFrame is >= 41 and <= 61 => new Rectangle(0, 0, 47, 200),
+            1 when sequenceFrame > constructionEnd &&
+                   sequenceFrame <= constructionEnd + 15 => new Rectangle(272, 0, 48, 200),
+            1 when sequenceFrame > constructionEnd + 60 &&
+                   sequenceFrame <= constructionEnd + 68 => new Rectangle(0, 0, 320, 92),
+            3 when sequenceFrame is >= 54 and <= 61 => new Rectangle(0, 0, 45, 200),
+            3 when sequenceFrame > constructionEnd &&
+                   sequenceFrame <= constructionEnd + 2 => new Rectangle(269, 0, 51, 200),
+            _ => null,
+        };
+    }
+
     internal void AdvanceCastleFramesForTest(int count)
     {
         if (screen != OriginalScreen.Castle)
@@ -4759,7 +5202,7 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void SetPracticeLine(int start)
     {
-        var line = OriginalPracticeLine(prompt, start);
+        var line = PracticeLine(prompt, start, PracticeTextColumns);
         practiceLine = line.Text;
         practiceLineEndExclusive = line.NextOffset;
         practiceLineTyped = 0;
@@ -4782,14 +5225,24 @@ internal sealed class NativeGameEngine : IDisposable
         return offset;
     }
 
-    internal static (string Text, int NextOffset) OriginalPracticeLine(string text, int start)
+    private int PracticeTextColumns => Math.Max(
+        32,
+        (DisplayFrameWidth(progress.DisplayMode) - 60) / 8);
+
+    internal static (string Text, int NextOffset) OriginalPracticeLine(string text, int start) =>
+        PracticeLine(text, start, 32);
+
+    internal static (string Text, int NextOffset) PracticeLine(
+        string text,
+        int start,
+        int maximumCharacters)
     {
         if (string.IsNullOrEmpty(text))
         {
             throw new ArgumentException("Practice lesson text cannot be empty.", nameof(text));
         }
 
-        const int maximumCharacters = 32;
+        maximumCharacters = Math.Max(1, maximumCharacters);
         var buffer = new StringBuilder(maximumCharacters);
         var offset = start;
         while (buffer.Length < maximumCharacters)
@@ -4840,7 +5293,7 @@ internal sealed class NativeGameEngine : IDisposable
     {
         var scenePalette = outsidePalettes[(int)progress.Character];
         var characterPrefix = CharacterPrefix(progress.Character);
-        raster.CopyFrom(outside);
+        raster.CopyFrom(outside, repeatHorizontally: raster.Width > ClassicFrameWidth);
         raster.DrawIndexedHorizontalWrap(
             outside.Pixels,
             CrxImage.Width,
@@ -4879,7 +5332,10 @@ internal sealed class NativeGameEngine : IDisposable
     {
         var scenePalette = waterPalettes[(int)progress.Character];
         var characterPrefix = CharacterPrefix(progress.Character);
-        raster.CopyFrom(water);
+        raster.CopyFrom(
+            water,
+            repeatHorizontally: raster.Width > ClassicFrameWidth,
+            extensionSourceX: Math.Max(0, ClassicFrameWidth * 2 - raster.Width));
         DrawTopDashboard(scenePalette);
         DrawWaterPrompt(scenePalette);
 
@@ -4930,7 +5386,8 @@ internal sealed class NativeGameEngine : IDisposable
     private void DrawWaterPrompt(VgaPalette scenePalette)
     {
         const int currentColumn = 10;
-        Span<char> buffer = stackalloc char[40];
+        var columns = Math.Max(40, raster.Width / 8);
+        Span<char> buffer = stackalloc char[columns];
         for (var column = 0; column < buffer.Length; column++)
         {
             var promptOffset = position + column - currentColumn;
@@ -5024,7 +5481,11 @@ internal sealed class NativeGameEngine : IDisposable
     {
         var scenePalette = castleScenePalettes[(int)progress.Character];
         var characterPrefix = CharacterPrefix(progress.Character);
-        raster.DrawIndexedImage(CurrentCastleBackdropPixels(), 320, 200, scenePalette, 0, 0);
+        raster.DrawIndexedImageHorizontallyTiled(
+            CurrentCastleBackdropPixels(),
+            ClassicFrameWidth,
+            FrameHeight,
+            scenePalette);
         DrawBottomDashboard(scenePalette);
         DrawCastlePrompt(scenePalette);
 
@@ -5076,6 +5537,10 @@ internal sealed class NativeGameEngine : IDisposable
         var interludeMoving = castleSequencePhase is 1 or 3 &&
                               !(castleSequenceFrame is >= 62 and <= 101);
         var runFrame = 1 + (castleRunCounter + castleSequenceFrame) % 12;
+        var marioClip = OriginalCastleMarioClip(
+            castleSequencePhase,
+            castleSequenceFrame,
+            castleConstructionFrames);
         if (sinking)
         {
             var sinkFrame = 1 + castleRunCounter / 3 % 5;
@@ -5083,12 +5548,18 @@ internal sealed class NativeGameEngine : IDisposable
                 walking[$"{characterPrefix}sin{sinkFrame:0000}_1"],
                 scenePalette,
                 castleMarioX,
-                castleMarioY);
+                castleMarioY,
+                clipRectangle: marioClip);
         }
         else if (castleVelocity == 0 && !interludeMoving &&
             idle.TryGet($"{characterPrefix}std0001_1", out var standingFrame))
         {
-            raster.DrawSprite(standingFrame, scenePalette, castleMarioX, castleMarioY);
+            raster.DrawSprite(
+                standingFrame,
+                scenePalette,
+                castleMarioX,
+                castleMarioY,
+                clipRectangle: marioClip);
         }
         else
         {
@@ -5096,13 +5567,15 @@ internal sealed class NativeGameEngine : IDisposable
                 walking[$"{characterPrefix}run{runFrame:0000}_1"],
                 scenePalette,
                 castleMarioX,
-                castleMarioY);
+                castleMarioY,
+                clipRectangle: marioClip);
         }
     }
 
     private void DrawCastlePrompt(VgaPalette scenePalette)
     {
-        Span<char> buffer = stackalloc char[40];
+        var columns = Math.Max(40, raster.Width / 8);
+        Span<char> buffer = stackalloc char[columns];
         for (var column = 0; column < buffer.Length; column++)
         {
             buffer[column] = PromptCharacterAt(prompt, castlePromptPosition + column);
@@ -5122,14 +5595,38 @@ internal sealed class NativeGameEngine : IDisposable
             new string(buffer[1..]),
             8,
             0,
-            39,
+            buffer.Length - 1,
             foregroundIndex: 10,
             secondaryIndex: 86);
     }
 
     private void RenderPractice()
     {
-        raster.CopyFrom(practice);
+        if (CenteredContentOffsetX == 0)
+        {
+            raster.CopyFrom(practice);
+        }
+        else
+        {
+            DrawMarioWallpaper();
+            var paper = practice.Palette.FindNearest(255, 255, 255);
+            var border = practice.Palette.FindNearest(0, 0, 160);
+            // Replace the complete original 272-pixel sheet, including its old
+            // left/right borders, so those borders cannot become seams inside
+            // the widened page.
+            raster.FillRectangle(
+                22,
+                91,
+                raster.Width - 44,
+                109,
+                practice.Palette.Argb[border]);
+            raster.FillRectangle(
+                24,
+                92,
+                raster.Width - 48,
+                108,
+                practice.Palette.Argb[paper]);
+        }
         DrawPracticeDashboard(practice.Palette);
         var elapsedTicks = OriginalElapsedTicks(clock.ElapsedMilliseconds - typingStarted);
         var wordsPerMinute = CalculateOriginalWordsPerMinuteFromTicks(position, errors, elapsedTicks);
@@ -5140,17 +5637,18 @@ internal sealed class NativeGameEngine : IDisposable
         raster.DrawSprite(
             practiceObjects[$"prac000{faceNumber}_1"],
             practice.Palette,
-            110,
+            CenteredX(110),
             0);
 
         var typedLength = Math.Clamp(practiceLineTyped, 0, practiceLine.Length);
+        var textColumns = PracticeTextColumns;
         font5.Draw(
             raster,
             practice.Palette,
             practiceLine[..typedLength],
             30,
             96,
-            32,
+            textColumns,
             foregroundIndex: 1);
         font5.Draw(
             raster,
@@ -5165,14 +5663,14 @@ internal sealed class NativeGameEngine : IDisposable
         for (var row = 0; row < 9; row++)
         {
             previewOffset = SkipPracticeWhitespace(prompt, previewOffset);
-            var preview = OriginalPracticeLine(prompt, previewOffset);
+            var preview = PracticeLine(prompt, previewOffset, textColumns);
             font5.Draw(
                 raster,
                 practice.Palette,
                 preview.Text,
                 30,
                 106 + row * 10,
-                32,
+                textColumns,
                 foregroundIndex: 0);
             previewOffset = preview.NextOffset;
         }
@@ -5180,12 +5678,13 @@ internal sealed class NativeGameEngine : IDisposable
         if (practiceLineTyped >= practiceLine.Length)
         {
             var paper = practice.Palette.FindNearest(255, 255, 255);
-            raster.FillRectangle(103, 143, 112, 15, practice.Palette.Argb[paper]);
+            var checkpointX = (raster.Width - 112) / 2;
+            raster.FillRectangle(checkpointX, 143, 112, 15, practice.Palette.Argb[paper]);
             font5.Draw(
                 raster,
                 practice.Palette,
                 "SPACE / ENTER",
-                108,
+                checkpointX + 5,
                 147,
                 13,
                 foregroundIndex: 1);
@@ -5244,43 +5743,73 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void RenderReportCard()
     {
-        raster.CopyFrom(reportCard);
+        DrawCenteredUiFrame(reportCard);
         var black = reportCard.Palette.FindNearest(0, 0, 0);
         var result = progress.Results.LastOrDefault();
         font5.Draw(
             raster, reportCard.Palette, $"Name: {progress.StudentName}",
-            60, 66, foregroundIndex: black);
+            CenteredX(60), 66, foregroundIndex: black);
         font5.Draw(
             raster, reportCard.Palette, $"Teacher: {CharacterDisplayName(progress.Character)}",
-            60, 80, foregroundIndex: black);
-        font5.Draw(raster, reportCard.Palette, "Level:", 60, 96, foregroundIndex: black);
+            CenteredX(60), 80, foregroundIndex: black);
+        font5.Draw(
+            raster,
+            reportCard.Palette,
+            "Level:",
+            CenteredX(60),
+            96,
+            foregroundIndex: black);
         font5.Draw(
             raster, reportCard.Palette, WorldDisplayName(progress.CurrentWorld),
-            178, 96, foregroundIndex: black);
-        font5.Draw(raster, reportCard.Palette, "Goal WPM:", 60, 108, foregroundIndex: black);
+            CenteredX(178), 96, foregroundIndex: black);
+        font5.Draw(
+            raster,
+            reportCard.Palette,
+            "Goal WPM:",
+            CenteredX(60),
+            108,
+            foregroundIndex: black);
         font5.Draw(
             raster, reportCard.Palette, $"{progress.GoalWordsPerMinute,3}",
-            178, 108, foregroundIndex: black);
+            CenteredX(178), 108, foregroundIndex: black);
         if (result is { WordsPerMinute: not 0 })
         {
-            font5.Draw(raster, reportCard.Palette, "Last WPM:", 60, 120, foregroundIndex: black);
+            font5.Draw(
+                raster,
+                reportCard.Palette,
+                "Last WPM:",
+                CenteredX(60),
+                120,
+                foregroundIndex: black);
             font5.Draw(
                 raster, reportCard.Palette, $"{result.WordsPerMinute,3:0}",
-                178, 120, foregroundIndex: black);
+                CenteredX(178), 120, foregroundIndex: black);
             if (Math.Round(result.Accuracy * 100) != 0)
             {
-                font5.Draw(raster, reportCard.Palette, "Accuracy:", 60, 132, foregroundIndex: black);
+                font5.Draw(
+                    raster,
+                    reportCard.Palette,
+                    "Accuracy:",
+                    CenteredX(60),
+                    132,
+                    foregroundIndex: black);
                 font5.Draw(
                     raster, reportCard.Palette, $"{result.Accuracy * 100,3:0}%",
-                    178, 132, foregroundIndex: black);
+                    CenteredX(178), 132, foregroundIndex: black);
             }
         }
-        font5.Draw(raster, reportCard.Palette, "Problem Keys:", 60, 144, foregroundIndex: black);
+        font5.Draw(
+            raster,
+            reportCard.Palette,
+            "Problem Keys:",
+            CenteredX(60),
+            144,
+            foregroundIndex: black);
         font3.Draw(
             raster,
             reportCard.Palette,
             result is null ? "None!" : ProblemKeySummary(result),
-            178,
+            CenteredX(178),
             143,
             15,
             foregroundIndex: reportCard.Palette.FindNearest(255, 255, 0));
@@ -5292,7 +5821,7 @@ internal sealed class NativeGameEngine : IDisposable
         foreach (var target in outsideTargets)
         {
             var x = target.X + target.SpriteXOffset;
-            if (x < -30 || x > 319 || prompt.Length == 0)
+            if (x < -30 || x >= raster.Width || prompt.Length == 0)
             {
                 continue;
             }
@@ -5345,8 +5874,12 @@ internal sealed class NativeGameEngine : IDisposable
 
     private void DrawPracticeDashboard(VgaPalette scenePalette)
     {
-        DrawHands(30, 45, 230);
-        DrawStatistics(scenePalette, bottom: false, drawTarget: false);
+        DrawHands(CenteredX(30), 45, 230);
+        DrawStatistics(
+            scenePalette,
+            bottom: false,
+            drawTarget: false,
+            xOffset: CenteredContentOffsetX);
     }
 
     private void DrawHands(int x, int y, int spacing)
@@ -5367,7 +5900,11 @@ internal sealed class NativeGameEngine : IDisposable
             y + element.YOffset);
     }
 
-    private void DrawStatistics(VgaPalette scenePalette, bool bottom, bool drawTarget)
+    private void DrawStatistics(
+        VgaPalette scenePalette,
+        bool bottom,
+        bool drawTarget,
+        int xOffset = 0)
     {
         var elapsedTicks = typingStarted < 0
             ? 0
@@ -5379,24 +5916,24 @@ internal sealed class NativeGameEngine : IDisposable
         var red = scenePalette.FindNearest(255, 64, 64);
         var hud = BuildOriginalHudState(screen, position, errors, wordsPerMinute, elapsed);
         font5.Draw(
-            raster, scenePalette, hud.TimeText, 0, hud.FirstRow,
+            raster, scenePalette, hud.TimeText, xOffset, hud.FirstRow,
             foregroundIndex: green);
         font5.Draw(
-            raster, scenePalette, hud.TypedText, 0, hud.SecondRow,
+            raster, scenePalette, hud.TypedText, xOffset, hud.SecondRow,
             foregroundIndex: yellow);
         font5.Draw(
             raster, scenePalette, hud.WordsPerMinuteText,
-            hud.WordsPerMinuteX, hud.FirstRow,
+            hud.WordsPerMinuteX + xOffset, hud.FirstRow,
             foregroundIndex: green);
         font5.Draw(
-            raster, scenePalette, hud.ErrorsText, hud.ErrorsX, hud.SecondRow,
+            raster, scenePalette, hud.ErrorsText, hud.ErrorsX + xOffset, hud.SecondRow,
             foregroundIndex: red);
         if (drawTarget)
         {
             var targetOffset = screen == OriginalScreen.Outside && outsideSelectedTarget is not null
                 ? outsideSelectedTarget.PromptIndex
                 : screen == OriginalScreen.Castle ? castlePromptPosition : position;
-            DrawTargetCharacter(font7, scenePalette, 154, hud.SecondRow, targetOffset);
+            DrawTargetCharacter(font7, scenePalette, 154 + xOffset, hud.SecondRow, targetOffset);
         }
     }
 
@@ -5483,7 +6020,8 @@ internal sealed class NativeGameEngine : IDisposable
     {
         auxiliarySelection = (auxiliarySelection + direction + CertificateFocusPoints.Length) %
                              CertificateFocusPoints.Length;
-        CertificateCursorRequested?.Invoke(CertificateFocusPoints[auxiliarySelection]);
+        CertificateCursorRequested?.Invoke(
+            CenteredPoint(CertificateFocusPoints[auxiliarySelection]));
         RenderAndNotify();
     }
 

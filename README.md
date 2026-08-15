@@ -5,10 +5,10 @@ An unofficial, source-level Windows port of the enhanced CD-ROM edition of
 Windows program: no DOSBox, virtual machine, mounted disc, CD-location prompt,
 or original DOS executable is used at runtime.
 
-## Download version 1.0
+## Download version 1.1
 
 Download **Mario Teaches Typing Native.exe** from the
-[v1.0.0 release](https://github.com/kandowontu/mario-teaches-typing-native/releases/tag/v1.0.0).
+[v1.1.0 release](https://github.com/kandowontu/mario-teaches-typing-native/releases/tag/v1.1.0).
 
 - Windows 10 or 11, x64
 - Portable, self-contained executable; no installer or separate runtime
@@ -27,6 +27,11 @@ running it.
 - Outdoor, underwater, castle, and practice activities with the original
   backgrounds, character variants, enemies, blocks, hand/finger guidance,
   prompts, scoring, timing, progression, bonuses, and reward paths.
+- Optional persistent 16:9 widescreen and 21:9 ultra-widescreen presentation
+  throughout the application. Moving worlds expose more upcoming letters,
+  Practice gains a seamless wider page and longer lesson lines, the main menu
+  spreads its movie and lesson rail across the frame, and fixed dialog panels
+  remain unstretched over the game's repeating Mario wallpaper.
 - Native decoders for the original CRX, GSO, GCO, BAN, ANI, AV, MVE, XMIDI,
   RLD, and lesson-data formats.
 - All 82 recovered enhanced-CD speech cue entries and native PCM playback.
@@ -50,6 +55,11 @@ type the displayed characters; spaces are represented by the hand cue. Main
 menu commands can be opened with the mouse or their original keyboard
 accelerators. Student WPM and lesson-time fields accept direct digits,
 Backspace, arrow keys, Page Up/Page Down, and the mouse wheel.
+
+Press **F10** for the application-wide 16:9 view or **F9** for the 21:9 view. The
+same mutually exclusive options are available as **File > Widescreen** and
+**File > Ultra Wide**. Press the active mode's key again to return to classic
+4:3. Press **F11** or **Alt+Enter** for full screen.
 
 ## Building from source
 
@@ -94,6 +104,9 @@ claimed. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Project status
 
-Version 1.0 is the first complete native release. Remaining work concerns
-exhaustive frame-level audiovisual comparisons and broader hardware testing,
-not replacement of the game with an emulator or launcher.
+Version 1.1 adds optional application-wide widescreen and ultra-widescreen
+playfields, responsive layouts, expanded look-ahead, startup music parity,
+disassembly-backed Castle pipe occlusion, and seamless main-menu speech
+compositing. Remaining work concerns exhaustive frame-level audiovisual
+comparisons and broader hardware testing, not replacement of the game with an
+emulator or launcher.
