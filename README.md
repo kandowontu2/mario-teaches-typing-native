@@ -8,7 +8,7 @@ or original DOS executable is used at runtime.
 ## Download version 1.1
 
 Download **Mario Teaches Typing Native.exe** from the
-[v1.1.0 release](https://github.com/kandowontu/mario-teaches-typing-native/releases/tag/v1.1.0).
+[v1.1.0 release](https://github.com/kandowontu2/mario-teaches-typing-native/releases/tag/v1.1.0).
 
 - Windows 10 or 11, x64
 - Portable, self-contained executable; no installer or separate runtime

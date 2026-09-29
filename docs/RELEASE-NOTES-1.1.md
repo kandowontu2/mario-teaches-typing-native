@@ -41,7 +41,7 @@ See [CHANGELOG.md](../CHANGELOG.md), [CREDITS.md](../CREDITS.md), and the
 File:    Mario Teaches Typing Native.exe
 Version: 1.1.0
 Size:    538,652,751 bytes
-SHA-256: 8F7E5DB6B4949D1689CFD7CF3CDBCF5EAED698EDFB3A8CF373D8723FE6D817CC
+SHA-256: 33C103814E386C8B28163EE0ACE39A4C66553C47E744453A1EFBDE07040E8CA6
 ```
 
 The packaged self-test completes all 43 checks, covering embedded media hashes,

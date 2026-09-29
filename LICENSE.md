@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 kandowontu
+Copyright (c) 2026 kandowontu2
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of the native-port source code and associated build-tooling files in this

@@ -11,10 +11,10 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Version>1.1.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
-    <Authors>kandowontu and contributors</Authors>
+    <Authors>kandowontu2 and contributors</Authors>
     <Product>Mario Teaches Typing Native</Product>
-    <Copyright>Native port code © 2026 kandowontu. Original game content belongs to its respective rights holders.</Copyright>
-    <RepositoryUrl>https://github.com/kandowontu/mario-teaches-typing-native</RepositoryUrl>
+    <Copyright>Native port code © 2026 kandowontu2. Original game content belongs to its respective rights holders.</Copyright>
+    <RepositoryUrl>https://github.com/kandowontu2/mario-teaches-typing-native</RepositoryUrl>
     <Description>Native Windows reimplementation of Mario Teaches Typing CD-ROM.</Description>
   </PropertyGroup>
 
