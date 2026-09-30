@@ -2,8 +2,8 @@
 
 ## Native Windows port
 
-- Project lead, testing, and release: [kandowontu2](https://github.com/kandowontu2)
-- Native-port engineering and reverse-engineering: kandowontu2 with OpenAI Codex
+- Project lead, testing, and release: [kandowontu](https://github.com/kandowontu2)
+- Native-port engineering and reverse-engineering: kandowontu with OpenAI Codex
 - Native architecture: C# / .NET 8 / Windows Forms
 
 Thanks to the preservation, reverse-engineering, and retro-computing
